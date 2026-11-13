@@ -35,8 +35,9 @@ List the ticket numbers you worked on, in the order you addressed them:
 
 1. **CFG-142**: The price is applied again, and only the response for the latest configuration is used. The loading state can no longer be ended by a stale response, so Add to Cart stays disabled until the current price arrives. Details in Issue 1.
 2. **CFG-149**: Resolved by the CFG-142 fix, no extra code. The existing dimmed price and "Calculating..." button now show reliably while a price loads, which is what the ticket asks for. Screen reader support for the loading state moved to CFG-152.
-3. **CFG-XXX**: [Brief description of what you did]
-4. ...
+3. **CFG-148**: Turning off "Include Packaging" no longer crashes the widget. Add-ons whose requirement stops being met are now deselected for every option type (before only dropdowns did this), so Gift Wrap is removed and no longer charged. The summary can no longer crash on an inconsistent add-on list (e.g. from a share link). Details in Issue 2.
+4. **CFG-XXX**: [Brief description of what you did]
+5. ...
 
 ### Tickets I Deprioritized
 
@@ -124,9 +125,37 @@ Verified in the app: 4 series of 6 rapid size/processor changes only ever showed
 
 ---
 
-#### Issue 2: [Title]
+#### Issue 2: Crash when deselecting "Include Packaging"
 
-[Same structure as above]
+**Ticket(s):** CFG-148
+
+**What was the bug?**
+
+Three problems in `ProductConfigurator.tsx` that together give the white screen:
+
+1. `handleOptionChange` removed dependent add-ons only for `select` options. The comment said toggles are handled in `handleAddOnToggle`, but they aren't - that handler only guards selecting an add-on, not changing the option it depends on. So Gift Wrap (requires "Include Packaging") stayed selected after packaging was turned off.
+2. The cleanup that did run mutated state: `selectedAddOns.splice(...)` and then `setSelectedAddOns` with the same array. React sees the same reference, and the handler read `selectedAddOns` from its closure, so it could work on an outdated list.
+3. The crash itself: the summary read each selected add-on's price with `availableAddOns.get(id)!.price`. `availableAddOns` only holds add-ons whose requirement is met, so for Gift Wrap it returned `undefined`. It was the wrong lookup - the summary needs the price of what's selected, availability doesn't matter there.
+
+Because of point 3 the same crash could also be hit without the toggle, e.g. by a share link with Gift Wrap but no packaging.
+
+**How did you find it?**
+
+Reproduced with the ticket steps during triage - exactly the reported error. The error points to a `.price` read, and the only unsafe one is the summary's non-null assertion on `availableAddOns`. Then the real question was why an add-on that isn't available is still selected, which led to the `select`-only cleanup in `handleOptionChange`.
+
+**How did you fix it?**
+
+- `handleOptionChange` now deselects dependent add-ons for every option type, in one functional state update that returns a new array (no mutation, no closure over `selectedAddOns`). It only needs the changed option and its new value. If nothing is removed, the same array is returned, so there's no extra render.
+- The summary looks up add-ons in `product.addOns`, the same way `utils/pricing.ts` does, so the summary always matches the computed price. The now unused `availableAddOns` memo is removed. The selected add-ons are resolved once and that list drives both the count and the prices, so an id the product doesn't know (e.g. from an old share link) is neither counted nor shown. I found this mismatch when I reviewed my own diff, and fixed it in its own commit.
+
+Verified in the app: the ticket steps no longer crash, Gift Wrap is unchecked and disabled, the total drops by exactly $14.99 and the summary updates. Turning packaging back on doesn't bring Gift Wrap back. The dropdown dependency (Premium Engraving needs Aluminum) still works. A crafted share link with Gift Wrap but no packaging renders, the summary matches the price, and Add to Cart / Quick Add stay disabled until packaging is turned on. No console errors.
+
+**Why this approach?**
+
+- Fixing only the summary would hide the crash but keep Gift Wrap in the configuration, so the customer would still be charged for gift wrapping without packaging. The invalid state has to be removed where it's created.
+- I didn't derive "effective" add-ons (selected ones filtered by availability). Then Gift Wrap would silently come back - and be charged again - when packaging is turned back on, which the user didn't ask for.
+- The summary fix stays anyway as defense in depth: state can also come from outside (share link, draft), and a wrong add-on list should never white-screen the widget. Validation already blocks checkout for it.
+- Git history: the pre-commit hook lints the whole file, and `ProductConfigurator.tsx` had 4 existing errors from other tickets, so a separate refactor commit made the file lint-clean first without changing behavior (a comment in the empty `catch`, and three single-line disables with a TODO naming the ticket that should fix each one: CFG-147, CFG-157). The two fixes are separate commits: the root cause first, then the defensive summary change.
 
 ---
 
@@ -135,7 +164,7 @@ Verified in the app: 4 series of 6 rapid size/processor changes only ever showed
 Brief description of any other modifications:
 
 - CFG-142: removed the unused `useDebouncedPriceCalculation` hook (dead code with the same stale-response bug) and the unused `refetch` from `usePriceCalculation`.
-- [Change 2]
+- CFG-148: made `ProductConfigurator.tsx` lint-clean without changing behavior, so commits touching it pass the pre-commit hook. The empty validation `catch` got a comment (TODO(CFG-151)), and the three `set-state-in-effect` errors got single-line disables with a TODO for the ticket that owns them (CFG-157 for `isDirty`, CFG-147 for the share URL and reading a shared config).
 
 ---
 
@@ -145,15 +174,18 @@ Brief description of any other modifications:
 
 List any issues you noticed but intentionally left:
 
-| Issue                                                                                                                                                                                                                                                 | Why I Left It                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| "✓ Configuration validated" is shown even when validation fails: `setIsValid(true)` runs after every validation, whatever the result.                                                                                                                 | Misleading status, but Add to Cart is still guarded by `validation.valid`. Not part of any ticket - worth its own ticket.              |
-| `isDirty` is effectively always `true`: an effect sets it on mount, and again right after loading or discarding a draft (the effect reacts to the restored selections). Confirmed in the app - "Discard" is visible on a fresh configuration.         | Belongs to CFG-157.                                                                                                                    |
-| A shared link drops the configuration name: `decodeConfigurationFromUrl` returns `name`, but the component never applies it.                                                                                                                          | Minor, no ticket asks for it. Could be added while fixing CFG-147 if it stays small.                                                   |
-| When a price request fails, the old total stays visible next to the error message (only the breakdown is cleared). The mock `calculatePrice` never rejects, so this path can't be reached in the demo.                                                | Belongs to CFG-151 (error handling). I kept the existing behavior in the CFG-142 fix.                                                  |
-| While a new price is loading, the hook still returns the previous `price` (it's shown dimmed). Add to Cart is disabled during loading, but Quick Add isn't and doesn't check `isPriceLoading`, so it can add the old price for the new configuration. | Fixed as part of CFG-145, since the hotkey calls the same handler.                                                                     |
-| A price result is matched to the current pricing inputs, not to the `product`. If a host swapped the `product` prop without changing the selections, the old product's price would briefly count as current.                                          | Can't happen in this app (`product` is a module constant). One extra field in the result if the widget ever gets a switchable product. |
-| The repo ships with ESLint errors (`ProductConfigurator.tsx`, `types.ts`), so `pnpm lint` fails on a clean checkout and the pre-commit hook blocks any commit that touches those files.                                                               | Each ticket that touches one of these files has to make that file lint-clean first. A full cleanup isn't part of any ticket.           |
+| Issue                                                                                                                                                                                                                                                              | Why I Left It                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "✓ Configuration validated" is shown even when validation fails: `setIsValid(true)` runs after every validation, whatever the result.                                                                                                                              | Misleading status, but Add to Cart is still guarded by `validation.valid`. Not part of any ticket - worth its own ticket.                                                                              |
+| `isDirty` is effectively always `true`: an effect sets it on mount, and again right after loading or discarding a draft (the effect reacts to the restored selections). Confirmed in the app - "Discard" is visible on a fresh configuration.                      | Belongs to CFG-157.                                                                                                                                                                                    |
+| A shared link drops the configuration name: `decodeConfigurationFromUrl` returns `name`, but the component never applies it.                                                                                                                                       | Minor, no ticket asks for it. Could be added while fixing CFG-147 if it stays small.                                                                                                                   |
+| When a price request fails, the old total stays visible next to the error message (only the breakdown is cleared). The mock `calculatePrice` never rejects, so this path can't be reached in the demo.                                                             | Belongs to CFG-151 (error handling). I kept the existing behavior in the CFG-142 fix.                                                                                                                  |
+| While a new price is loading, the hook still returns the previous `price` (it's shown dimmed). Add to Cart is disabled during loading, but Quick Add isn't and doesn't check `isPriceLoading`, so it can add the old price for the new configuration.              | Fixed as part of CFG-145, since the hotkey calls the same handler.                                                                                                                                     |
+| A price result is matched to the current pricing inputs, not to the `product`. If a host swapped the `product` prop without changing the selections, the old product's price would briefly count as current.                                                       | Can't happen in this app (`product` is a module constant). One extra field in the result if the widget ever gets a switchable product.                                                                 |
+| The repo ships with ESLint errors (`ProductConfigurator.tsx`, `types.ts`), so `pnpm lint` fails on a clean checkout and the pre-commit hook blocks any commit that touches those files.                                                                            | Each ticket that touches one of these files has to make that file lint-clean first. A full cleanup isn't part of any ticket. `ProductConfigurator.tsx` is clean since CFG-148, `types.ts` still isn't. |
+| A share link or draft can still restore an add-on whose requirement isn't met (e.g. Gift Wrap without packaging). Since CFG-148 this no longer crashes, the summary matches the price and checkout is blocked by validation, but the add-on isn't removed on load. | Belongs to CFG-147 (share links). Pruning on load should reuse the same dependency rule as `handleOptionChange`.                                                                                       |
+| The packaging toggle's `onKeyDown` ignores `readOnly`: in read-only mode the mouse can't change it, but Enter / Space can.                                                                                                                                         | Not part of CFG-148. Small, fits CFG-152 (keyboard handling) when the toggle gets a proper accessible name.                                                                                            |
+| A disabled add-on says "(Requires include_packaging)" - a raw option id instead of the option's name.                                                                                                                                                              | User-facing wording, fits CFG-151.                                                                                                                                                                     |
 
 ### Potential Improvements for the Future
 
