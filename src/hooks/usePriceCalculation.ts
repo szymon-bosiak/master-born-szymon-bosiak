@@ -1,21 +1,31 @@
 // usePriceCalculation Hook
 // Marcus: "This hook handles async price fetching. A bit janky but works."
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useEffectEvent, useMemo } from 'react';
 import type {
   Configuration,
   Product,
   PriceBreakdown,
-  PriceResponse,
 } from '../components/ProductConfigurator/types';
 import { calculatePrice } from '../services/api';
+import { formatPrice } from '../utils/pricing';
 
 interface UsePriceCalculationResult {
   price: PriceBreakdown | null;
   formattedTotal: string;
   isLoading: boolean;
   error: string | null;
-  refetch: () => void;
+}
+
+// The parts of a configuration that affect the price.
+type PricingInputs = Partial<Pick<Configuration, 'selections' | 'addOns' | 'quantity'>>;
+
+interface PriceResult {
+  // What this result was calculated for, so we can tell whether it is still current.
+  inputs: PricingInputs;
+  price: PriceBreakdown | null;
+  formattedTotal: string | null;
+  error: string | null;
 }
 
 /**
@@ -25,137 +35,71 @@ export function usePriceCalculation(
   config: Configuration | null,
   product: Product,
 ): UsePriceCalculationResult {
-  const [price, setPrice] = useState<PriceBreakdown | null>(null);
-  const [formattedTotal, setFormattedTotal] = useState<string>('$0.00');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<PriceResult | null>(null);
 
-  // Track latest request timestamp to prevent stale responses from overwriting newer ones.
-  // Guards against race conditions when the user changes options in rapid succession.
-  const latestRequestRef = useRef<number>(0);
+  const selections = config?.selections;
+  const addOns = config?.addOns;
+  const quantity = config?.quantity;
 
-  const fetchPrice = useCallback(async () => {
-    if (!config) {
-      setPrice(null);
-      setFormattedTotal('$0.00');
-      return;
-    }
+  // A new reference only when one of the pricing inputs changes. It triggers the request
+  // and identifies the result. If React ever drops this memo, we only refetch once more.
+  const inputs = useMemo<PricingInputs>(
+    () => ({ selections, addOns, quantity }),
+    [selections, addOns, quantity],
+  );
 
-    setIsLoading(true);
-    setError(null);
-
-    const requestTime = Date.now();
-    latestRequestRef.current = requestTime;
-
-    try {
-      const response: PriceResponse = await calculatePrice(config, product);
-
-      if (response.timestamp >= latestRequestRef.current) {
-        setPrice(response.breakdown);
-        setFormattedTotal(response.formattedTotal);
-      }
-    } catch {
-      // Only set error if this is still the latest request
-      if (requestTime === latestRequestRef.current) {
-        setError('ERR_PRICE_CALC_FAILED');
-        setPrice(null);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [config, product]);
-
-  // Fetch price when config changes
-  useEffect(() => {
-    fetchPrice();
-  }, [config?.selections, config?.addOns, config?.quantity]);
-
-  return {
-    price,
-    formattedTotal,
-    isLoading,
-    error,
-    refetch: fetchPrice,
-  };
-}
-
-/**
- * Debounced version of price calculation
- */
-export function useDebouncedPriceCalculation(
-  config: Configuration | null,
-  product: Product,
-  delay: number = 300,
-): UsePriceCalculationResult {
-  const [price, setPrice] = useState<PriceBreakdown | null>(null);
-  const [formattedTotal, setFormattedTotal] = useState<string>('$0.00');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const configRef = useRef(config);
+  // Reads the latest config inside the effect without making fields that don't affect
+  // the price (e.g. the draft name) a dependency, so typing a name doesn't refetch.
+  const getConfig = useEffectEvent(() => config);
 
   useEffect(() => {
-    // Clear any pending timeout
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
+    const requestConfig = getConfig();
+    if (!requestConfig) return;
 
-    if (!config) {
-      setPrice(null);
-      setFormattedTotal('$0.00');
-      setIsLoading(false);
-      return;
-    }
+    // Responses can arrive out of order. Cleanup marks this request as stale as soon as
+    // the inputs change (or the component unmounts), so only the latest response is applied.
+    let isStale = false;
 
-    setIsLoading(true);
-
-    timeoutRef.current = setTimeout(async () => {
-      try {
-        const response = await calculatePrice(configRef.current!, product);
-        setPrice(response.breakdown);
-        setFormattedTotal(response.formattedTotal);
-        setError(null);
-      } catch {
-        setError('ERR_PRICE_CALC_FAILED');
-      } finally {
-        setIsLoading(false);
-      }
-    }, delay);
-
-    configRef.current = config;
+    calculatePrice(requestConfig, product).then(
+      (response) => {
+        if (isStale) return;
+        setResult({
+          inputs,
+          price: response.breakdown,
+          formattedTotal: response.formattedTotal,
+          error: null,
+        });
+      },
+      () => {
+        if (isStale) return;
+        setResult((previous) => ({
+          inputs,
+          price: null,
+          formattedTotal: previous?.formattedTotal ?? null,
+          error: 'ERR_PRICE_CALC_FAILED',
+        }));
+      },
+    );
 
     return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
+      isStale = true;
     };
-  }, [config, product, delay]);
+  }, [inputs, product]);
 
-  const refetch = useCallback(() => {
-    if (config) {
-      setIsLoading(true);
-      calculatePrice(config, product)
-        .then((response) => {
-          setPrice(response.breakdown);
-          setFormattedTotal(response.formattedTotal);
-          setError(null);
-        })
-        .catch(() => {
-          setError('ERR_PRICE_CALC_FAILED');
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-    }
-  }, [config, product]);
+  const placeholderTotal = formatPrice(0, product.currency);
+
+  if (!config) {
+    return { price: null, formattedTotal: placeholderTotal, isLoading: false, error: null };
+  }
+
+  // Loading until the shown result belongs to the current inputs. Derived instead of
+  // stored, so a stale response can never end the loading state early.
+  const isCurrent = result?.inputs === inputs;
 
   return {
-    price,
-    formattedTotal,
-    isLoading,
-    error,
-    refetch,
+    price: result?.price ?? null,
+    formattedTotal: result?.formattedTotal ?? placeholderTotal,
+    isLoading: !isCurrent,
+    error: isCurrent ? (result?.error ?? null) : null,
   };
 }
