@@ -33,7 +33,7 @@ Total time: **\_\_** (approximate)
 
 List the ticket numbers you worked on, in the order you addressed them:
 
-1. **CFG-XXX**: [Brief description of what you did]
+1. **CFG-142**: The price is applied again, and only the response for the latest configuration is used. The loading state can no longer be ended by a stale response, so Add to Cart stays disabled until the current price arrives. Details in Issue 1.
 2. **CFG-XXX**: [Brief description of what you did]
 3. ...
 
@@ -89,25 +89,37 @@ If a ticket was ambiguous enough that the right move was to escalate / ask PM / 
 
 Describe the most important bugs you identified:
 
-#### Issue 1: [Title]
+#### Issue 1: Price never updates - stuck at $0.00
 
-**Ticket(s):** CFG-XXX
+**Ticket(s):** CFG-142 (also fixes the broken loading state behind CFG-149)
 
 **What was the bug?**
 
-[Describe the root cause]
+Two bugs in `usePriceCalculation`:
+
+1. The stale-response guard compared two unrelated numbers. It stored `Date.now()` (about 1.7 trillion) as the latest request and applied a response only if `response.timestamp >= latest`. But `response.timestamp` is the mock API's request counter (1, 2, 3...), so the condition was never true and no price was ever applied.
+2. With the comparison fixed, a second bug shows up. The mock answers in 150-800 ms, so responses arrive out of order, and `finally` cleared `isLoading` for every response, stale ones included. Add to Cart got enabled while the current price was still loading, i.e. with the price of an older configuration.
 
 **How did you find it?**
 
-[Your debugging process]
+Reproduced in the app: after any change the total stays at `$0.00` and no breakdown is shown, while the API returns real values. So I went to the place where the hook decides whether to apply a response and checked what each side of the condition actually contains. The ticket also mentions a price that "flashes and snaps back to zero". I couldn't reproduce that, and it can't happen with this code, because the price is never set at all. It would fit a real backend whose clock is slightly ahead of the client's - one more reason not to compare client and server values.
 
 **How did you fix it?**
 
-[Explain your solution]
+- Stale responses are dropped in the effect cleanup (the standard React pattern for fetching in an effect): when the inputs change or the component unmounts, the in-flight request is marked stale and its result is ignored. No client vs. server comparison at all.
+- `isLoading` is derived instead of stored: it's `true` until the shown result belongs to the current pricing inputs (selections, add-ons, quantity). A stale response can't end it early. The first render is already in the loading state too, so the placeholder `$0.00` is dimmed and the button says "Calculating..." until the first price arrives.
+- The effect depends only on the inputs that affect the price. The rest of the config is read through `useEffectEvent`, so typing a draft name doesn't send price requests.
+- Removed the unused `useDebouncedPriceCalculation`: no callers, and it had the same stale-response flaw.
+- After reviewing my own diff I simplified the state in a separate commit: the pricing inputs live in one memoized object (the effect dependency and the key stored with the result, so "is this result current" is a single reference check), the unused `refetch` is gone, and the placeholder total is formatted with the product's currency through the existing `formatPrice` instead of a hard-coded `'$0.00'`.
+
+Verified in the app: 4 series of 6 rapid size/processor changes only ever showed the old (dimmed) price or the final correct one, never an intermediate one, and the loading state never ended early. Quantity, add-on and volume discount totals checked by hand. Typing a draft name doesn't trigger loading. No console errors.
 
 **Why this approach?**
 
-[Any alternatives you considered]
+- Fixing only the comparison (e.g. a client-side request counter) would fix the `$0.00`, but keep the loading state as manually toggled flags - the pattern that caused bug 2. It also keeps a synchronous `setIsLoading(true)` in the effect, which the repo's ESLint config rejects (`react-hooks/set-state-in-effect`) and the pre-commit hook blocks. Deriving the loading state removes the whole class of bug, not just this instance.
+- `AbortController`: the mock API doesn't accept a signal, changing the API contract is out of scope, and late results would still have to be ignored.
+- Debounce: fewer requests, but it doesn't fix ordering - the removed debounced hook had exactly this bug.
+- Git history: the pre-commit hook lints whole files, and this file had two existing errors, so no commit could touch it until both were gone. The refactor commit therefore disables the rule on one line, with a TODO, and the fix commit removes the disable. The simplification after self-review is its own refactor commit, so the fix itself stays readable.
 
 ---
 
@@ -121,7 +133,7 @@ Describe the most important bugs you identified:
 
 Brief description of any other modifications:
 
-- [Change 1]
+- CFG-142: removed the unused `useDebouncedPriceCalculation` hook (dead code with the same stale-response bug) and the unused `refetch` from `usePriceCalculation`.
 - [Change 2]
 
 ---
@@ -132,11 +144,15 @@ Brief description of any other modifications:
 
 List any issues you noticed but intentionally left:
 
-| Issue                                                                                                                                                                                                                                         | Why I Left It                                                                                                             |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| "✓ Configuration validated" is shown even when validation fails: `setIsValid(true)` runs after every validation, whatever the result.                                                                                                         | Misleading status, but Add to Cart is still guarded by `validation.valid`. Not part of any ticket - worth its own ticket. |
-| `isDirty` is effectively always `true`: an effect sets it on mount, and again right after loading or discarding a draft (the effect reacts to the restored selections). Confirmed in the app - "Discard" is visible on a fresh configuration. | Belongs to CFG-157.                                                                                                       |
-| A shared link drops the configuration name: `decodeConfigurationFromUrl` returns `name`, but the component never applies it.                                                                                                                  | Minor, no ticket asks for it. Could be added while fixing CFG-147 if it stays small.                                      |
+| Issue                                                                                                                                                                                                                                                 | Why I Left It                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| "✓ Configuration validated" is shown even when validation fails: `setIsValid(true)` runs after every validation, whatever the result.                                                                                                                 | Misleading status, but Add to Cart is still guarded by `validation.valid`. Not part of any ticket - worth its own ticket.              |
+| `isDirty` is effectively always `true`: an effect sets it on mount, and again right after loading or discarding a draft (the effect reacts to the restored selections). Confirmed in the app - "Discard" is visible on a fresh configuration.         | Belongs to CFG-157.                                                                                                                    |
+| A shared link drops the configuration name: `decodeConfigurationFromUrl` returns `name`, but the component never applies it.                                                                                                                          | Minor, no ticket asks for it. Could be added while fixing CFG-147 if it stays small.                                                   |
+| When a price request fails, the old total stays visible next to the error message (only the breakdown is cleared). The mock `calculatePrice` never rejects, so this path can't be reached in the demo.                                                | Belongs to CFG-151 (error handling). I kept the existing behavior in the CFG-142 fix.                                                  |
+| While a new price is loading, the hook still returns the previous `price` (it's shown dimmed). Add to Cart is disabled during loading, but Quick Add isn't and doesn't check `isPriceLoading`, so it can add the old price for the new configuration. | Fixed as part of CFG-145, since the hotkey calls the same handler.                                                                     |
+| A price result is matched to the current pricing inputs, not to the `product`. If a host swapped the `product` prop without changing the selections, the old product's price would briefly count as current.                                          | Can't happen in this app (`product` is a module constant). One extra field in the result if the widget ever gets a switchable product. |
+| The repo ships with ESLint errors (`ProductConfigurator.tsx`, `types.ts`), so `pnpm lint` fails on a clean checkout and the pre-commit hook blocks any commit that touches those files.                                                               | Each ticket that touches one of these files has to make that file lint-clean first. A full cleanup isn't part of any ticket.           |
 
 ### Potential Improvements for the Future
 
