@@ -146,8 +146,6 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const [error, setError] = useState<string | null>(null);
 
-  const [shareUrl, setShareUrl] = useState<string>('');
-
   const containerRef = useRef<HTMLDivElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   const lastFocusedElement = useRef<HTMLElement | null>(null);
@@ -168,6 +166,15 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
       name: draftName || undefined,
     }),
     [configId, product.id, selections, selectedAddOns, quantity, draftName],
+  );
+
+  // Encoded only while the Share modal is open.
+  const shareUrl = useMemo(
+    () =>
+      showShareModal
+        ? `${window.location.origin}${window.location.pathname}?config=${encodeConfigurationToUrl(currentConfig)}`
+        : '',
+    [showShareModal, currentConfig],
   );
 
   const {
@@ -259,15 +266,6 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
       getAllDrafts().then(setDrafts);
     }
   }, [showDraftModal]);
-
-  useEffect(() => {
-    if (showShareModal) {
-      const encoded = encodeConfigurationToUrl(currentConfig);
-      const url = `${window.location.origin}${window.location.pathname}?config=${encoded}`;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): derive the share URL instead of storing it
-      setShareUrl(url);
-    }
-  }, [showShareModal, currentConfig]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
