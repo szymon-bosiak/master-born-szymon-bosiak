@@ -1,31 +1,30 @@
 // usePriceCalculation Hook
 // Marcus: "This hook handles async price fetching. A bit janky but works."
 
-import { useState, useEffect, useEffectEvent, useCallback } from 'react';
+import { useState, useEffect, useEffectEvent, useMemo } from 'react';
 import type {
   Configuration,
   Product,
   PriceBreakdown,
 } from '../components/ProductConfigurator/types';
 import { calculatePrice } from '../services/api';
+import { formatPrice } from '../utils/pricing';
 
 interface UsePriceCalculationResult {
   price: PriceBreakdown | null;
   formattedTotal: string;
   isLoading: boolean;
   error: string | null;
-  refetch: () => void;
 }
 
 // The parts of a configuration that affect the price.
-type PricingInputs = Pick<Configuration, 'selections' | 'addOns' | 'quantity'>;
+type PricingInputs = Partial<Pick<Configuration, 'selections' | 'addOns' | 'quantity'>>;
 
 interface PriceResult {
   // What this result was calculated for, so we can tell whether it is still current.
   inputs: PricingInputs;
-  refetchId: number;
   price: PriceBreakdown | null;
-  formattedTotal: string;
+  formattedTotal: string | null;
   error: string | null;
 }
 
@@ -37,11 +36,17 @@ export function usePriceCalculation(
   product: Product,
 ): UsePriceCalculationResult {
   const [result, setResult] = useState<PriceResult | null>(null);
-  const [refetchId, setRefetchId] = useState(0);
 
   const selections = config?.selections;
   const addOns = config?.addOns;
   const quantity = config?.quantity;
+
+  // A new reference only when one of the pricing inputs changes. It triggers the request
+  // and identifies the result. If React ever drops this memo, we only refetch once more.
+  const inputs = useMemo<PricingInputs>(
+    () => ({ selections, addOns, quantity }),
+    [selections, addOns, quantity],
+  );
 
   // Reads the latest config inside the effect without making fields that don't affect
   // the price (e.g. the draft name) a dependency, so typing a name doesn't refetch.
@@ -54,18 +59,12 @@ export function usePriceCalculation(
     // Responses can arrive out of order. Cleanup marks this request as stale as soon as
     // the inputs change (or the component unmounts), so only the latest response is applied.
     let isStale = false;
-    const inputs: PricingInputs = {
-      selections: requestConfig.selections,
-      addOns: requestConfig.addOns,
-      quantity: requestConfig.quantity,
-    };
 
     calculatePrice(requestConfig, product).then(
       (response) => {
         if (isStale) return;
         setResult({
           inputs,
-          refetchId,
           price: response.breakdown,
           formattedTotal: response.formattedTotal,
           error: null,
@@ -75,9 +74,8 @@ export function usePriceCalculation(
         if (isStale) return;
         setResult((previous) => ({
           inputs,
-          refetchId,
           price: null,
-          formattedTotal: previous?.formattedTotal ?? '$0.00',
+          formattedTotal: previous?.formattedTotal ?? null,
           error: 'ERR_PRICE_CALC_FAILED',
         }));
       },
@@ -86,28 +84,22 @@ export function usePriceCalculation(
     return () => {
       isStale = true;
     };
-  }, [selections, addOns, quantity, product, refetchId]);
+  }, [inputs, product]);
 
-  const refetch = useCallback(() => setRefetchId((id) => id + 1), []);
+  const placeholderTotal = formatPrice(0, product.currency);
 
   if (!config) {
-    return { price: null, formattedTotal: '$0.00', isLoading: false, error: null, refetch };
+    return { price: null, formattedTotal: placeholderTotal, isLoading: false, error: null };
   }
 
   // Loading until the shown result belongs to the current inputs. Derived instead of
   // stored, so a stale response can never end the loading state early.
-  const isCurrent =
-    result !== null &&
-    result.refetchId === refetchId &&
-    result.inputs.selections === selections &&
-    result.inputs.addOns === addOns &&
-    result.inputs.quantity === quantity;
+  const isCurrent = result?.inputs === inputs;
 
   return {
     price: result?.price ?? null,
-    formattedTotal: result?.formattedTotal ?? '$0.00',
+    formattedTotal: result?.formattedTotal ?? placeholderTotal,
     isLoading: !isCurrent,
-    error: isCurrent ? result.error : null,
-    refetch,
+    error: isCurrent ? (result?.error ?? null) : null,
   };
 }
