@@ -215,13 +215,13 @@ While triaging CFG-145 I compared the two cart buttons, since the hotkey had to 
 **How did you fix it?**
 
 - One derived `canAddToCart` (not read-only, validation passed, the price is current and present) drives both buttons, and `handleQuickAdd` checks it itself, because a shortcut bypasses `disabled`. The two buttons can't drift apart again, and that drift was the bug. A disabled Quick Add now looks disabled.
-- The shortcut is Ctrl+Enter, plus Cmd+Enter for Mac users. Alt and Shift are excluded, so AltGr (Ctrl+Alt on Polish and other layouts) doesn't trigger it.
+- The shortcut is Ctrl+Enter, plus Cmd+Enter for Mac users. It works the same on every keyboard layout, including Polish, which matters here (the CFG-147 customer is Polish): it only checks the Enter key and the modifier flags, and none of them depend on the layout. Only AltGr+Enter is ignored: Windows reports AltGr as Ctrl+Alt, so without the Alt check the right Alt key would add to the cart too. Shift+Ctrl+Enter is ignored as well.
 - It listens on the widget's root element, in the capture phase: it runs before the focused control, and `preventDefault` / `stopPropagation` keep a focused button or the packaging switch from also reacting to Enter.
 - The root has `tabIndex={-1}` (not in the tab order), so a click anywhere in the widget keeps focus inside it and the shortcut works after clicking a swatch.
 - It's ignored while the Drafts or Share modal is open (typing a draft name must not add to the cart behind the modal), and holding the keys adds once (`e.repeat`).
 - The button shows a `Ctrl+Enter` hint, and `aria-keyshortcuts` exposes the shortcut to screen readers. The visible hint is `aria-hidden`, so the button's name isn't read twice.
 
-Verified in the app with real key presses (adds counted through a stubbed `alert`): after clicking a swatch, with Add to Cart focused and with the packaging switch focused, Ctrl+Enter adds exactly once, and packaging doesn't change. Plain Enter still toggles the switch. Right after a size change the shortcut and the button do nothing until the new price arrives, then add once with the new total. Held keys add once, and Ctrl+Enter in the draft name field adds nothing. No focus ring appears on the root after a click, and there are no console errors.
+Verified in the app with real key presses (adds counted through a stubbed `alert`): after clicking a swatch, with Add to Cart focused and with the packaging switch focused, Ctrl+Enter adds exactly once, and packaging doesn't change. Plain Enter still toggles the switch. Right after a size change the shortcut and the button do nothing until the new price arrives, then add once with the new total. Held keys add once, and Ctrl+Enter in the draft name field adds nothing. Key events shaped like the ones Windows sends: left Ctrl, right Ctrl and numpad Enter each add once, AltGr+Enter (Ctrl+Alt) adds nothing. No focus ring appears on the root after a click, and there are no console errors.
 
 **Why this approach?**
 
