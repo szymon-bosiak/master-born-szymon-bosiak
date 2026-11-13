@@ -206,9 +206,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   const [previewUrl, setPreviewUrl] = useState<string>(product.imageUrl);
 
   // A broken share link falls back to the defaults, so tell the user instead of failing silently.
-  // TODO(CFG-151): user-facing message instead of the raw code.
+  // TODO(CFG-151): map the code to a message (retrying won't help, the link itself is broken).
   const [error, setError] = useState<string | null>(() =>
-    sharedLink.status === 'invalid' ? ERROR_CODES.UNKNOWN : null,
+    sharedLink.status === 'invalid' ? ERROR_CODES.INVALID_SHARE_LINK : null,
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
