@@ -80,6 +80,12 @@ const getDefaultSelections = (product: Product): Record<string, string | number 
   return selections;
 };
 
+// Configuration from a share link (?config=...), if the page was opened with one.
+const readSharedConfigFromUrl = (): Partial<Configuration> | null => {
+  const encoded = new URLSearchParams(window.location.search).get('config');
+  return encoded ? decodeConfigurationFromUrl(encoded) : null;
+};
+
 const isAddOnAvailable = (
   addOn: AddOn,
   selections: Record<string, string | number | boolean>,
@@ -119,15 +125,21 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   // State
   // -------------------------------------------------------------------------
 
+  // A share link takes precedence over initialConfiguration.
+  const [sharedConfig] = useState(readSharedConfigFromUrl);
+
   const [selections, setSelections] = useState<Record<string, string | number | boolean>>(
-    () => initialConfiguration?.selections || getDefaultSelections(product),
+    () =>
+      sharedConfig?.selections || initialConfiguration?.selections || getDefaultSelections(product),
   );
 
   const [selectedAddOns, setSelectedAddOns] = useState<string[]>(
-    () => initialConfiguration?.addOns || [],
+    () => sharedConfig?.addOns || initialConfiguration?.addOns || [],
   );
 
-  const [quantity, setQuantity] = useState<number>(() => initialConfiguration?.quantity || 1);
+  const [quantity, setQuantity] = useState<number>(
+    () => sharedConfig?.quantity || initialConfiguration?.quantity || 1,
+  );
 
   const [configId] = useState<string>(() => initialConfiguration?.id || generateConfigId());
 
@@ -266,21 +278,6 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
       getAllDrafts().then(setDrafts);
     }
   }, [showDraftModal]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const encodedConfig = params.get('config');
-
-    if (encodedConfig) {
-      const decoded = decodeConfigurationFromUrl(encodedConfig);
-      if (decoded) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): read the shared config in the initial state instead
-        if (decoded.selections) setSelections(decoded.selections);
-        if (decoded.addOns) setSelectedAddOns(decoded.addOns);
-        if (decoded.quantity) setQuantity(decoded.quantity);
-      }
-    }
-  }, []);
 
   // -------------------------------------------------------------------------
   // Event Handlers
