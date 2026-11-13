@@ -470,8 +470,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     [handleModalClose],
   );
 
-  // Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add from anywhere inside the widget. Alt is
-  // excluded so AltGr (Ctrl+Alt on e.g. Polish layouts) doesn't trigger it.
+  // Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add from anywhere inside the widget. Works the same
+  // on every keyboard layout, including Polish. Only AltGr+Enter is ignored: Windows reports
+  // AltGr as Ctrl+Alt, so without the Alt check the right Alt key would add to the cart too.
   const handleShortcutKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const isQuickAddShortcut =
