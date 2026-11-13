@@ -80,6 +80,18 @@ const getDefaultSelections = (product: Product): Record<string, string | number 
   return selections;
 };
 
+type SharedLink =
+  { status: 'none' } | { status: 'invalid' } | { status: 'valid'; config: Partial<Configuration> };
+
+// Share link (?config=...) the page was opened with, if any.
+const readSharedLinkFromUrl = (): SharedLink => {
+  const encoded = new URLSearchParams(window.location.search).get('config');
+  if (!encoded) return { status: 'none' };
+
+  const config = decodeConfigurationFromUrl(encoded);
+  return config ? { status: 'valid', config } : { status: 'invalid' };
+};
+
 const isAddOnAvailable = (
   addOn: AddOn,
   selections: Record<string, string | number | boolean>,
@@ -88,6 +100,51 @@ const isAddOnAvailable = (
 
   const dependencyValue = selections[addOn.dependsOn.optionId];
   return dependencyValue === addOn.dependsOn.requiredValue;
+};
+
+const clampQuantity = (product: Product, value: number): number => {
+  const quantityOption = product.options.find((o) => o.type === 'quantity');
+  const min = quantityOption?.min ?? 1;
+  const max = quantityOption?.max ?? 999;
+  return Math.max(min, Math.min(max, value));
+};
+
+// A starting configuration (share link or initialConfiguration) may be crafted or outdated:
+// keep only what the product allows and fall back to defaults for the rest, so it can't
+// restore an impossible configuration. An empty source gives the defaults.
+const sanitizeConfiguration = (
+  source: Partial<Configuration>,
+  product: Product,
+): Pick<Configuration, 'selections' | 'addOns' | 'quantity' | 'name'> => {
+  const selections = getDefaultSelections(product);
+  for (const option of product.options) {
+    const value = source.selections?.[option.id];
+    const isValid =
+      option.type === 'toggle'
+        ? typeof value === 'boolean'
+        : (option.choices?.some((c) => c.available && c.value === value) ?? false);
+    if (isValid && value !== undefined) {
+      selections[option.id] = value;
+    }
+  }
+
+  // Same dependency rule as handleOptionChange: drop add-ons whose requirement isn't met.
+  const sourceAddOns = Array.isArray(source.addOns) ? source.addOns : [];
+  const addOns = product.addOns
+    .filter((addOn) => sourceAddOns.includes(addOn.id) && isAddOnAvailable(addOn, selections))
+    .map((addOn) => addOn.id);
+
+  const sourceQuantity =
+    typeof source.quantity === 'number' && Number.isFinite(source.quantity)
+      ? Math.trunc(source.quantity)
+      : 1;
+
+  return {
+    selections,
+    addOns,
+    quantity: clampQuantity(product, sourceQuantity),
+    name: typeof source.name === 'string' ? source.name : undefined,
+  };
 };
 
 const formatTimestamp = (isoString: string): string => {
@@ -119,21 +176,25 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   // State
   // -------------------------------------------------------------------------
 
-  const [selections, setSelections] = useState<Record<string, string | number | boolean>>(
-    () => initialConfiguration?.selections || getDefaultSelections(product),
+  const [sharedLink] = useState(readSharedLinkFromUrl);
+
+  // A share link takes precedence over initialConfiguration; without either, the defaults.
+  const [startConfig] = useState(() =>
+    sanitizeConfiguration(
+      sharedLink.status === 'valid' ? sharedLink.config : (initialConfiguration ?? {}),
+      product,
+    ),
   );
 
-  const [selectedAddOns, setSelectedAddOns] = useState<string[]>(
-    () => initialConfiguration?.addOns || [],
-  );
-
-  const [quantity, setQuantity] = useState<number>(() => initialConfiguration?.quantity || 1);
+  const [selections, setSelections] = useState(startConfig.selections);
+  const [selectedAddOns, setSelectedAddOns] = useState(startConfig.addOns);
+  const [quantity, setQuantity] = useState(startConfig.quantity);
 
   const [configId] = useState<string>(() => initialConfiguration?.id || generateConfigId());
 
   const [isDirty, setIsDirty] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [draftName, setDraftName] = useState('');
+  const [draftName, setDraftName] = useState(startConfig.name ?? '');
 
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -144,9 +205,11 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const [previewUrl, setPreviewUrl] = useState<string>(product.imageUrl);
 
-  const [error, setError] = useState<string | null>(null);
-
-  const [shareUrl, setShareUrl] = useState<string>('');
+  // A broken share link falls back to the defaults, so tell the user instead of failing silently.
+  // TODO(CFG-151): map the code to a message (retrying won't help, the link itself is broken).
+  const [error, setError] = useState<string | null>(() =>
+    sharedLink.status === 'invalid' ? ERROR_CODES.INVALID_SHARE_LINK : null,
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
@@ -168,6 +231,15 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
       name: draftName || undefined,
     }),
     [configId, product.id, selections, selectedAddOns, quantity, draftName],
+  );
+
+  // Encoded only while the Share modal is open.
+  const shareUrl = useMemo(
+    () =>
+      showShareModal
+        ? `${window.location.origin}${window.location.pathname}?config=${encodeConfigurationToUrl(currentConfig)}`
+        : '',
+    [showShareModal, currentConfig],
   );
 
   const {
@@ -260,30 +332,6 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     }
   }, [showDraftModal]);
 
-  useEffect(() => {
-    if (showShareModal) {
-      const encoded = encodeConfigurationToUrl(currentConfig);
-      const url = `${window.location.origin}${window.location.pathname}?config=${encoded}`;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): derive the share URL instead of storing it
-      setShareUrl(url);
-    }
-  }, [showShareModal, currentConfig]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const encodedConfig = params.get('config');
-
-    if (encodedConfig) {
-      const decoded = decodeConfigurationFromUrl(encodedConfig);
-      if (decoded) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): read the shared config in the initial state instead
-        if (decoded.selections) setSelections(decoded.selections);
-        if (decoded.addOns) setSelectedAddOns(decoded.addOns);
-        if (decoded.quantity) setQuantity(decoded.quantity);
-      }
-    }
-  }, []);
-
   // -------------------------------------------------------------------------
   // Event Handlers
   // -------------------------------------------------------------------------
@@ -330,14 +378,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const handleQuantityChange = useCallback(
     (newQuantity: number) => {
-      const quantityOption = product.options.find((o) => o.type === 'quantity');
-      const min = quantityOption?.min ?? 1;
-      const max = quantityOption?.max ?? 999;
-
-      const clampedQuantity = Math.max(min, Math.min(max, newQuantity));
-      setQuantity(clampedQuantity);
+      setQuantity(clampQuantity(product, newQuantity));
     },
-    [product.options],
+    [product],
   );
 
   const handleSaveDraft = useCallback(async () => {

@@ -131,6 +131,7 @@ export const ERROR_CODES = {
   NETWORK_TIMEOUT: 'ERR_NETWORK_TIMEOUT_PRICE',
   INVALID_QUANTITY: 'ERR_INVALID_QTY',
   DEPENDENCY_MISSING: 'ERR_DEP_MISSING_47',
+  INVALID_SHARE_LINK: 'ERR_INVALID_SHARE_LINK',
   UNKNOWN: 'ERR_UNKNOWN',
 } as const;
 
@@ -141,6 +142,6 @@ export interface ConfigChangeEvent {
   type: 'option' | 'addon' | 'quantity';
   optionId?: string;
   addOnId?: string;
-  previousValue: any;
-  newValue: any;
+  previousValue: unknown;
+  newValue: unknown;
 }
