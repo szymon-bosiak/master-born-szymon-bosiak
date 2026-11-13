@@ -11,12 +11,6 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-/* The root is focusable only so a click keeps focus inside the widget (Quick Add shortcut).
-   Tab never reaches it, so it shouldn't get a focus ring around the whole widget. */
-.configurator:focus {
-  outline: none;
-}
-
 .configurator-header {
   display: flex;
   justify-content: space-between;

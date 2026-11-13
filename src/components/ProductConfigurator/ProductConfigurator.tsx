@@ -18,7 +18,7 @@
  * - "Resize handler might have a leak" - Marcus
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useEffectEvent, useCallback, useMemo, useRef } from 'react';
 import type {
   Product,
   ProductOption,
@@ -461,25 +461,35 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     [handleModalClose],
   );
 
-  // Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add from anywhere inside the widget. Works the same
-  // on every keyboard layout, including Polish. Only AltGr+Enter is ignored: Windows reports
-  // AltGr as Ctrl+Alt, so without the Alt check the right Alt key would add to the cart too.
-  const handleShortcutKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const isQuickAddShortcut =
-        e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
-      // Typing in a modal (e.g. a draft name) must not add to the cart behind it.
-      if (!isQuickAddShortcut || showDraftModal || showShareModal) return;
+  // Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add. Works the same on every keyboard layout,
+  // including Polish. Only AltGr+Enter is ignored: Windows reports AltGr as Ctrl+Alt, so without
+  // the Alt check the right Alt key would add to the cart too.
+  const onShortcutKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    const isQuickAddShortcut =
+      e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+    // Typing in a modal (e.g. a draft name) must not add to the cart behind it.
+    if (!isQuickAddShortcut || showDraftModal || showShareModal) return;
 
-      // Handled in the capture phase, before the focused control: otherwise Enter would also
-      // click a focused button or flip the packaging switch.
-      e.preventDefault();
-      e.stopPropagation();
-      // Holding the keys adds once. The guards (loading price, validation) are in handleAddToCart.
-      if (!e.repeat) handleAddToCart();
-    },
-    [showDraftModal, showShareModal, handleAddToCart],
-  );
+    // Focus inside the widget, or nowhere: right after the page loads, or after a click on
+    // something that can't take focus (key events then go to <body>). A focused element of
+    // the host page keeps its own Ctrl+Enter.
+    const isInWidget = e.target instanceof Node && containerRef.current?.contains(e.target);
+    const isNothingFocused = e.target === document.body || e.target === document.documentElement;
+    if (!isInWidget && !isNothingFocused) return;
+
+    // Listens in the capture phase, before the focused control: otherwise Enter would also
+    // click a focused button or flip the packaging switch.
+    e.preventDefault();
+    e.stopPropagation();
+    // Holding the keys adds once. The guards (loading price, validation) are in handleAddToCart.
+    if (!e.repeat) handleAddToCart();
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => onShortcutKeyDown(e);
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, []);
 
   const handleDiscardChanges = useCallback(() => {
     setSelections(getDefaultSelections(product));
@@ -859,15 +869,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   // -------------------------------------------------------------------------
 
   return (
-    // The shortcut listens on the widget, not on window, so it never takes Ctrl+Enter from the
-    // host page. tabIndex -1 (not in the tab order) keeps focus inside the widget after a click
-    // on a non-focusable part, e.g. a color swatch (not focusable yet, CFG-152).
-    <div
-      className="configurator"
-      ref={containerRef}
-      tabIndex={-1}
-      onKeyDownCapture={handleShortcutKeyDown}
-    >
+    <div className="configurator" ref={containerRef}>
       <div className="configurator-header">
         <div>
           <h1 className="configurator-title">{product.name}</h1>
