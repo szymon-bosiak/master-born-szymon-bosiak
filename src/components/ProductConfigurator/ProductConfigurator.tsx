@@ -80,10 +80,16 @@ const getDefaultSelections = (product: Product): Record<string, string | number 
   return selections;
 };
 
-// Configuration from a share link (?config=...), if the page was opened with one.
-const readSharedConfigFromUrl = (): Partial<Configuration> | null => {
+type SharedLink =
+  { status: 'none' } | { status: 'invalid' } | { status: 'valid'; config: Partial<Configuration> };
+
+// Share link (?config=...) the page was opened with, if any.
+const readSharedLinkFromUrl = (): SharedLink => {
   const encoded = new URLSearchParams(window.location.search).get('config');
-  return encoded ? decodeConfigurationFromUrl(encoded) : null;
+  if (!encoded) return { status: 'none' };
+
+  const config = decodeConfigurationFromUrl(encoded);
+  return config ? { status: 'valid', config } : { status: 'invalid' };
 };
 
 const isAddOnAvailable = (
@@ -164,11 +170,12 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   // State
   // -------------------------------------------------------------------------
 
+  const [sharedLink] = useState(readSharedLinkFromUrl);
+
   // A share link takes precedence over initialConfiguration.
-  const [sharedConfig] = useState(() => {
-    const decoded = readSharedConfigFromUrl();
-    return decoded && sanitizeSharedConfiguration(decoded, product);
-  });
+  const [sharedConfig] = useState(() =>
+    sharedLink.status === 'valid' ? sanitizeSharedConfiguration(sharedLink.config, product) : null,
+  );
 
   const [selections, setSelections] = useState<Record<string, string | number | boolean>>(
     () =>
@@ -198,7 +205,11 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const [previewUrl, setPreviewUrl] = useState<string>(product.imageUrl);
 
-  const [error, setError] = useState<string | null>(null);
+  // A broken share link falls back to the defaults, so tell the user instead of failing silently.
+  // TODO(CFG-151): user-facing message instead of the raw code.
+  const [error, setError] = useState<string | null>(() =>
+    sharedLink.status === 'invalid' ? ERROR_CODES.UNKNOWN : null,
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
