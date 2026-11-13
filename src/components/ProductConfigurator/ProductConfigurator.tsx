@@ -96,6 +96,45 @@ const isAddOnAvailable = (
   return dependencyValue === addOn.dependsOn.requiredValue;
 };
 
+const clampQuantity = (product: Product, value: number): number => {
+  const quantityOption = product.options.find((o) => o.type === 'quantity');
+  const min = quantityOption?.min ?? 1;
+  const max = quantityOption?.max ?? 999;
+  return Math.max(min, Math.min(max, value));
+};
+
+// A share link is untrusted input: keep only what the product allows and fall back to
+// defaults for the rest, so the link can't restore an impossible configuration.
+const sanitizeSharedConfiguration = (
+  shared: Partial<Configuration>,
+  product: Product,
+): Pick<Configuration, 'selections' | 'addOns' | 'quantity'> => {
+  const selections = getDefaultSelections(product);
+  for (const option of product.options) {
+    const value = shared.selections?.[option.id];
+    const isValid =
+      option.type === 'toggle'
+        ? typeof value === 'boolean'
+        : (option.choices?.some((c) => c.available && c.value === value) ?? false);
+    if (isValid && value !== undefined) {
+      selections[option.id] = value;
+    }
+  }
+
+  // Same dependency rule as handleOptionChange: drop add-ons whose requirement isn't met.
+  const sharedAddOns = Array.isArray(shared.addOns) ? shared.addOns : [];
+  const addOns = product.addOns
+    .filter((addOn) => sharedAddOns.includes(addOn.id) && isAddOnAvailable(addOn, selections))
+    .map((addOn) => addOn.id);
+
+  const sharedQuantity =
+    typeof shared.quantity === 'number' && Number.isFinite(shared.quantity)
+      ? Math.trunc(shared.quantity)
+      : 1;
+
+  return { selections, addOns, quantity: clampQuantity(product, sharedQuantity) };
+};
+
 const formatTimestamp = (isoString: string): string => {
   const date = new Date(isoString);
   return date.toLocaleString();
@@ -126,7 +165,10 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   // -------------------------------------------------------------------------
 
   // A share link takes precedence over initialConfiguration.
-  const [sharedConfig] = useState(readSharedConfigFromUrl);
+  const [sharedConfig] = useState(() => {
+    const decoded = readSharedConfigFromUrl();
+    return decoded && sanitizeSharedConfiguration(decoded, product);
+  });
 
   const [selections, setSelections] = useState<Record<string, string | number | boolean>>(
     () =>
@@ -325,14 +367,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const handleQuantityChange = useCallback(
     (newQuantity: number) => {
-      const quantityOption = product.options.find((o) => o.type === 'quantity');
-      const min = quantityOption?.min ?? 1;
-      const max = quantityOption?.max ?? 999;
-
-      const clampedQuantity = Math.max(min, Math.min(max, newQuantity));
-      setQuantity(clampedQuantity);
+      setQuantity(clampQuantity(product, newQuantity));
     },
-    [product.options],
+    [product],
   );
 
   const handleSaveDraft = useCallback(async () => {
