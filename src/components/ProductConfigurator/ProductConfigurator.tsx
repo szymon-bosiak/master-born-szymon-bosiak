@@ -951,8 +951,17 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
             </div>
 
             <div className="quick-add-section">
-              <button className="quick-add-btn" onClick={handleQuickAdd} disabled={!canAddToCart}>
+              <button
+                className="quick-add-btn"
+                onClick={handleQuickAdd}
+                disabled={!canAddToCart}
+                aria-keyshortcuts="Control+Enter Meta+Enter"
+              >
                 ⚡ Quick Add to Cart
+                {/* Hidden from screen readers, which get the shortcut from aria-keyshortcuts. */}
+                <kbd className="shortcut-hint" aria-hidden="true">
+                  Ctrl+Enter
+                </kbd>
               </button>
             </div>
           </div>

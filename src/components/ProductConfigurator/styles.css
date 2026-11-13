@@ -445,6 +445,16 @@
   cursor: not-allowed;
 }
 
+.shortcut-hint {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
 /* Draft Management */
 .draft-section {
   margin-top: 24px;
