@@ -180,6 +180,12 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   const appliedDiscount = getAppliedDiscountPercentage(quantity);
   const nextTier = getNextDiscountTier(quantity);
 
+  // Selected add-ons that exist in the product (a share link or draft may carry unknown ids).
+  const selectedAddOnDetails = selectedAddOns.flatMap((id) => {
+    const addOn = product.addOns.find((a) => a.id === id);
+    return addOn ? [addOn] : [];
+  });
+
   // -------------------------------------------------------------------------
   // Effects
   // -------------------------------------------------------------------------
@@ -914,15 +920,12 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
               <span>Quantity:</span>
               <span>{quantity}</span>
             </div>
-            {selectedAddOns.length > 0 && (
+            {selectedAddOnDetails.length > 0 && (
               <div className="config-summary-item">
-                <span>Add-ons ({selectedAddOns.length}):</span>
+                <span>Add-ons ({selectedAddOnDetails.length}):</span>
                 <span>
-                  {selectedAddOns
-                    .flatMap((id) => {
-                      const addOn = product.addOns.find((a) => a.id === id);
-                      return addOn ? [formatPrice(addOn.price, product.currency)] : [];
-                    })
+                  {selectedAddOnDetails
+                    .map((addOn) => formatPrice(addOn.price, product.currency))
                     .join(' + ')}
                 </span>
               </div>
