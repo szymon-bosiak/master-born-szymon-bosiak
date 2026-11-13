@@ -217,7 +217,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
           setValidation(result);
           setIsValid(true);
         }
-      } catch {}
+      } catch {
+        // Validation failures are ignored for now. TODO(CFG-151): surface them to the user.
+      }
     };
 
     validate();
@@ -252,6 +254,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     if (onConfigurationChange) {
       onConfigurationChange(currentConfig);
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-157): derive isDirty instead of setting it on every change
     setIsDirty(true);
   }, [selections, selectedAddOns, quantity]);
 
@@ -265,6 +268,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     if (showShareModal) {
       const encoded = encodeConfigurationToUrl(currentConfig);
       const url = `${window.location.origin}${window.location.pathname}?config=${encoded}`;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): derive the share URL instead of storing it
       setShareUrl(url);
     }
   }, [showShareModal, currentConfig]);
@@ -276,6 +280,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     if (encodedConfig) {
       const decoded = decodeConfigurationFromUrl(encodedConfig);
       if (decoded) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): read the shared config in the initial state instead
         if (decoded.selections) setSelections(decoded.selections);
         if (decoded.addOns) setSelectedAddOns(decoded.addOns);
         if (decoded.quantity) setQuantity(decoded.quantity);
