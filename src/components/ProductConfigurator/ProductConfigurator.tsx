@@ -258,6 +258,10 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     return addOn ? [addOn] : [];
   });
 
+  // Shared by Add to Cart and Quick Add. While a new price loads, `price` still belongs to the
+  // previous configuration, so neither may add until the current price has arrived.
+  const canAddToCart = !readOnly && validation?.valid === true && !isPriceLoading && price !== null;
+
   // -------------------------------------------------------------------------
   // Effects
   // -------------------------------------------------------------------------
@@ -432,10 +436,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   }, [validation, price, currentConfig, onAddToCart]);
 
   const handleQuickAdd = useCallback(() => {
-    if (price && onAddToCart) {
-      onAddToCart(currentConfig, price);
-    }
-  }, [price, currentConfig, onAddToCart]);
+    if (!canAddToCart || !price) return;
+    onAddToCart?.(currentConfig, price);
+  }, [canAddToCart, price, currentConfig, onAddToCart]);
 
   const handleCopyShareUrl = useCallback(() => {
     navigator.clipboard
@@ -921,11 +924,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
             </div>
 
             <div className="quick-add-section">
-              <button
-                className="quick-add-btn"
-                onClick={handleQuickAdd}
-                disabled={readOnly || !validation?.valid}
-              >
+              <button className="quick-add-btn" onClick={handleQuickAdd} disabled={!canAddToCart}>
                 ⚡ Quick Add to Cart
               </button>
             </div>
@@ -934,7 +933,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
           <button
             className="btn btn-success btn-block"
             onClick={handleAddToCart}
-            disabled={readOnly || !validation?.valid || isPriceLoading}
+            disabled={!canAddToCart}
           >
             {isPriceLoading ? 'Calculating...' : 'Add to Cart'}
           </button>

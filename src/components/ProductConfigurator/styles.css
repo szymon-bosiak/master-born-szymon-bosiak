@@ -436,8 +436,13 @@
   transition: background 0.2s;
 }
 
-.quick-add-btn:hover {
+.quick-add-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.2);
+}
+
+.quick-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Draft Management */
