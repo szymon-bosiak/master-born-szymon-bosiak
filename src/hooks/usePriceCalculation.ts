@@ -1,12 +1,11 @@
 // usePriceCalculation Hook
 // Marcus: "This hook handles async price fetching. A bit janky but works."
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useEffectEvent, useCallback } from 'react';
 import type {
   Configuration,
   Product,
   PriceBreakdown,
-  PriceResponse,
 } from '../components/ProductConfigurator/types';
 import { calculatePrice } from '../services/api';
 
@@ -18,6 +17,18 @@ interface UsePriceCalculationResult {
   refetch: () => void;
 }
 
+// The parts of a configuration that affect the price.
+type PricingInputs = Pick<Configuration, 'selections' | 'addOns' | 'quantity'>;
+
+interface PriceResult {
+  // What this result was calculated for, so we can tell whether it is still current.
+  inputs: PricingInputs;
+  refetchId: number;
+  price: PriceBreakdown | null;
+  formattedTotal: string;
+  error: string | null;
+}
+
 /**
  * Custom hook for managing price calculation
  */
@@ -25,58 +36,78 @@ export function usePriceCalculation(
   config: Configuration | null,
   product: Product,
 ): UsePriceCalculationResult {
-  const [price, setPrice] = useState<PriceBreakdown | null>(null);
-  const [formattedTotal, setFormattedTotal] = useState<string>('$0.00');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<PriceResult | null>(null);
+  const [refetchId, setRefetchId] = useState(0);
 
-  // Track latest request timestamp to prevent stale responses from overwriting newer ones.
-  // Guards against race conditions when the user changes options in rapid succession.
-  const latestRequestRef = useRef<number>(0);
+  const selections = config?.selections;
+  const addOns = config?.addOns;
+  const quantity = config?.quantity;
 
-  const fetchPrice = useCallback(async () => {
-    if (!config) {
-      setPrice(null);
-      setFormattedTotal('$0.00');
-      return;
-    }
+  // Reads the latest config inside the effect without making fields that don't affect
+  // the price (e.g. the draft name) a dependency, so typing a name doesn't refetch.
+  const getConfig = useEffectEvent(() => config);
 
-    setIsLoading(true);
-    setError(null);
-
-    const requestTime = Date.now();
-    latestRequestRef.current = requestTime;
-
-    try {
-      const response: PriceResponse = await calculatePrice(config, product);
-
-      if (response.timestamp >= latestRequestRef.current) {
-        setPrice(response.breakdown);
-        setFormattedTotal(response.formattedTotal);
-      }
-    } catch {
-      // Only set error if this is still the latest request
-      if (requestTime === latestRequestRef.current) {
-        setError('ERR_PRICE_CALC_FAILED');
-        setPrice(null);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [config, product]);
-
-  // Fetch price when config changes
   useEffect(() => {
-    // TODO(CFG-142): temporary - removed together with the price fix in the next commit.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchPrice();
-  }, [config?.selections, config?.addOns, config?.quantity]);
+    const requestConfig = getConfig();
+    if (!requestConfig) return;
+
+    // Responses can arrive out of order. Cleanup marks this request as stale as soon as
+    // the inputs change (or the component unmounts), so only the latest response is applied.
+    let isStale = false;
+    const inputs: PricingInputs = {
+      selections: requestConfig.selections,
+      addOns: requestConfig.addOns,
+      quantity: requestConfig.quantity,
+    };
+
+    calculatePrice(requestConfig, product).then(
+      (response) => {
+        if (isStale) return;
+        setResult({
+          inputs,
+          refetchId,
+          price: response.breakdown,
+          formattedTotal: response.formattedTotal,
+          error: null,
+        });
+      },
+      () => {
+        if (isStale) return;
+        setResult((previous) => ({
+          inputs,
+          refetchId,
+          price: null,
+          formattedTotal: previous?.formattedTotal ?? '$0.00',
+          error: 'ERR_PRICE_CALC_FAILED',
+        }));
+      },
+    );
+
+    return () => {
+      isStale = true;
+    };
+  }, [selections, addOns, quantity, product, refetchId]);
+
+  const refetch = useCallback(() => setRefetchId((id) => id + 1), []);
+
+  if (!config) {
+    return { price: null, formattedTotal: '$0.00', isLoading: false, error: null, refetch };
+  }
+
+  // Loading until the shown result belongs to the current inputs. Derived instead of
+  // stored, so a stale response can never end the loading state early.
+  const isCurrent =
+    result !== null &&
+    result.refetchId === refetchId &&
+    result.inputs.selections === selections &&
+    result.inputs.addOns === addOns &&
+    result.inputs.quantity === quantity;
 
   return {
-    price,
-    formattedTotal,
-    isLoading,
-    error,
-    refetch: fetchPrice,
+    price: result?.price ?? null,
+    formattedTotal: result?.formattedTotal ?? '$0.00',
+    isLoading: !isCurrent,
+    error: isCurrent ? result.error : null,
+    refetch,
   };
 }
