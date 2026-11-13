@@ -470,6 +470,25 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     [handleModalClose],
   );
 
+  // Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add from anywhere inside the widget. Alt is
+  // excluded so AltGr (Ctrl+Alt on e.g. Polish layouts) doesn't trigger it.
+  const handleShortcutKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const isQuickAddShortcut =
+        e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+      // Typing in a modal (e.g. a draft name) must not add to the cart behind it.
+      if (!isQuickAddShortcut || showDraftModal || showShareModal) return;
+
+      // Handled in the capture phase, before the focused control: otherwise Enter would also
+      // click a focused button or flip the packaging switch.
+      e.preventDefault();
+      e.stopPropagation();
+      // Holding the keys adds once. The guards (loading price, validation) are in handleQuickAdd.
+      if (!e.repeat) handleQuickAdd();
+    },
+    [showDraftModal, showShareModal, handleQuickAdd],
+  );
+
   const handleDiscardChanges = useCallback(() => {
     setSelections(getDefaultSelections(product));
     setSelectedAddOns([]);
@@ -848,7 +867,15 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   // -------------------------------------------------------------------------
 
   return (
-    <div className="configurator" ref={containerRef}>
+    // The shortcut listens on the widget, not on window, so it never takes Ctrl+Enter from the
+    // host page. tabIndex -1 (not in the tab order) keeps focus inside the widget after a click
+    // on a non-focusable part, e.g. a color swatch (not focusable yet, CFG-152).
+    <div
+      className="configurator"
+      ref={containerRef}
+      tabIndex={-1}
+      onKeyDownCapture={handleShortcutKeyDown}
+    >
       <div className="configurator-header">
         <div>
           <h1 className="configurator-title">{product.name}</h1>
