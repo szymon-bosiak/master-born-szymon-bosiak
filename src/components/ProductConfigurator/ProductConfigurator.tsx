@@ -424,18 +424,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     }
   }, []);
 
+  // Shared by Add to Cart, Quick Add and the Quick Add shortcut. The shortcut bypasses the
+  // buttons' `disabled`, so the handler checks canAddToCart itself.
   const handleAddToCart = useCallback(() => {
-    if (!validation?.valid) {
-      setError(validation?.errors[0]?.code || ERROR_CODES.UNKNOWN);
-      return;
-    }
-
-    if (price && onAddToCart) {
-      onAddToCart(currentConfig, price);
-    }
-  }, [validation, price, currentConfig, onAddToCart]);
-
-  const handleQuickAdd = useCallback(() => {
     if (!canAddToCart || !price) return;
     onAddToCart?.(currentConfig, price);
   }, [canAddToCart, price, currentConfig, onAddToCart]);
@@ -484,10 +475,10 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
       // click a focused button or flip the packaging switch.
       e.preventDefault();
       e.stopPropagation();
-      // Holding the keys adds once. The guards (loading price, validation) are in handleQuickAdd.
-      if (!e.repeat) handleQuickAdd();
+      // Holding the keys adds once. The guards (loading price, validation) are in handleAddToCart.
+      if (!e.repeat) handleAddToCart();
     },
-    [showDraftModal, showShareModal, handleQuickAdd],
+    [showDraftModal, showShareModal, handleAddToCart],
   );
 
   const handleDiscardChanges = useCallback(() => {
@@ -954,7 +945,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
             <div className="quick-add-section">
               <button
                 className="quick-add-btn"
-                onClick={handleQuickAdd}
+                onClick={handleAddToCart}
                 disabled={!canAddToCart}
                 aria-keyshortcuts="Control+Enter Meta+Enter"
               >
