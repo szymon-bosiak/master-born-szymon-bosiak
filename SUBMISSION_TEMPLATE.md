@@ -37,8 +37,7 @@ List the ticket numbers you worked on, in the order you addressed them:
 2. **CFG-149**: Resolved by the CFG-142 fix, no extra code. The existing dimmed price and "Calculating..." button now show reliably while a price loads, which is what the ticket asks for. Screen reader support for the loading state moved to CFG-152.
 3. **CFG-148**: Turning off "Include Packaging" no longer crashes the widget. Add-ons whose requirement stops being met are now deselected for every option type (before only dropdowns did this), so Gift Wrap is removed and no longer charged. The summary can no longer crash on an inconsistent add-on list (e.g. from a share link). Details in Issue 2.
 4. **CFG-147**: Share links work for any configuration name (emoji, Polish letters) and no longer break when the encoded data contains a `+`. Links shared before the fix still open. Opening a link restores the name, drops values the product doesn't allow (e.g. Gift Wrap without packaging) and shows an error instead of silently loading the defaults when the link is broken. Details in Issue 3.
-5. **CFG-XXX**: [Brief description of what you did]
-6. ...
+5. **CFG-145**: Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add from anywhere inside the widget, and the button shows the shortcut. Quick Add now has the same guards as Add to Cart, so it can no longer add the previous configuration's price while a new one is loading. Details in Issue 4.
 
 ### Tickets I Deprioritized
 
@@ -201,6 +200,38 @@ Verified in the app: with the customer's name, Share opens without a crash and t
 
 ---
 
+#### Issue 4: Quick Add keyboard shortcut
+
+**Ticket(s):** CFG-145 (CFG-144 rejected, see Deprioritized)
+
+**What was the bug?**
+
+The ticket is a feature request, but the feature it extends had a bug: `handleQuickAdd` had no guards, and its button was disabled only for read-only mode and a failed validation. While a new price is loading, `usePriceCalculation` still returns the previous `price` (shown dimmed), so Quick Add could add the old configuration's price to the cart. Add to Cart had the extra `isPriceLoading` check, Quick Add didn't. A hotkey that calls the same handler would make this even easier to hit. The disabled Quick Add button also looked exactly like the enabled one.
+
+**How did you find it?**
+
+While triaging CFG-145 I compared the two cart buttons, since the hotkey had to behave like one of them. Before writing the listener I also checked what Ctrl+Enter already does inside the widget: Enter clicks a focused `<button>`, and the packaging switch's own `onKeyDown` reacts to Enter with any modifier. So a plain bubbling listener would add twice (button click + shortcut), or toggle packaging and then add the configuration from before the toggle. Color swatches and add-on rows aren't focusable, so a click on them moves focus to `body`, out of the widget.
+
+**How did you fix it?**
+
+- One derived `canAddToCart` (not read-only, validation passed, the price is current and present) drives both buttons, and `handleQuickAdd` checks it itself, because a shortcut bypasses `disabled`. The two buttons can't drift apart again, and that drift was the bug. A disabled Quick Add now looks disabled.
+- The shortcut is Ctrl+Enter, plus Cmd+Enter for Mac users. Alt and Shift are excluded, so AltGr (Ctrl+Alt on Polish and other layouts) doesn't trigger it.
+- It listens on the widget's root element, in the capture phase: it runs before the focused control, and `preventDefault` / `stopPropagation` keep a focused button or the packaging switch from also reacting to Enter.
+- The root has `tabIndex={-1}` (not in the tab order), so a click anywhere in the widget keeps focus inside it and the shortcut works after clicking a swatch.
+- It's ignored while the Drafts or Share modal is open (typing a draft name must not add to the cart behind the modal), and holding the keys adds once (`e.repeat`).
+- The button shows a `Ctrl+Enter` hint, and `aria-keyshortcuts` exposes the shortcut to screen readers. The visible hint is `aria-hidden`, so the button's name isn't read twice.
+
+Verified in the app with real key presses (adds counted through a stubbed `alert`): after clicking a swatch, with Add to Cart focused and with the packaging switch focused, Ctrl+Enter adds exactly once, and packaging doesn't change. Plain Enter still toggles the switch. Right after a size change the shortcut and the button do nothing until the new price arrives, then add once with the new total. Held keys add once, and Ctrl+Enter in the draft name field adds nothing. No focus ring appears on the root after a click, and there are no console errors.
+
+**Why this approach?**
+
+- Widget instead of `window`: the widget is embedded via iframe or directly into a customer's page (CONTEXT.md). A `window` listener would take Ctrl+Enter from the host page in a direct integration, e.g. a chat or comment box where it means "send". The cost is that the shortcut needs focus inside the widget, which is why the root is focusable. Whether TechStyle wants it page-wide is in Questions for the Team.
+- A guard in the handler instead of only `disabled` on the button: a shortcut never looks at the button, so every way into the action has to pass the same check.
+- I didn't queue a shortcut press that comes while the price is loading. It would have to decide what happens if the configuration changes again in the meantime, and the dimmed price and button already show why nothing happened. Noted in Things I Noticed.
+- Git history: the guard fix comes first and alone, because it's a bug on its own, even without the shortcut. The shortcut and its visible hint are separate commits.
+
+---
+
 ### Other Changes Made
 
 Brief description of any other modifications:
@@ -208,6 +239,7 @@ Brief description of any other modifications:
 - CFG-142: removed the unused `useDebouncedPriceCalculation` hook (dead code with the same stale-response bug) and the unused `refetch` from `usePriceCalculation`.
 - CFG-148: made `ProductConfigurator.tsx` lint-clean without changing behavior, so commits touching it pass the pre-commit hook. The empty validation `catch` got a comment (TODO(CFG-151)), and the three `set-state-in-effect` errors got single-line disables with a TODO for the ticket that owns them (CFG-157 for `isDirty`, CFG-147 for the share URL and reading a shared config).
 - CFG-147: removed both CFG-147 disables by deriving the share URL and reading the share link in the initial state (only the CFG-157 one is left). Extracted `clampQuantity`, now used by the quantity input and by the starting configuration. Made `types.ts` lint-clean (`any` to `unknown` in the unused `ConfigChangeEvent`) to add the new error code, so `pnpm lint` now passes for the whole repo.
+- CFG-145: Add to Cart now uses the same `canAddToCart` check, which also disables it when there is no price at all (a failed request) instead of leaving a button that does nothing. Added a disabled style for the Quick Add button.
 
 ---
 
@@ -222,7 +254,6 @@ List any issues you noticed but intentionally left:
 | "✓ Configuration validated" is shown even when validation fails: `setIsValid(true)` runs after every validation, whatever the result.                                                                                                                   | Misleading status, but Add to Cart is still guarded by `validation.valid`. Not part of any ticket - worth its own ticket.                                                                                                                           |
 | `isDirty` is effectively always `true`: an effect sets it on mount, and again right after loading or discarding a draft (the effect reacts to the restored selections). Confirmed in the app - "Discard" is visible on a fresh configuration.           | Belongs to CFG-157.                                                                                                                                                                                                                                 |
 | When a price request fails, the old total stays visible next to the error message (only the breakdown is cleared). The mock `calculatePrice` never rejects, so this path can't be reached in the demo.                                                  | Belongs to CFG-151 (error handling). I kept the existing behavior in the CFG-142 fix.                                                                                                                                                               |
-| While a new price is loading, the hook still returns the previous `price` (it's shown dimmed). Add to Cart is disabled during loading, but Quick Add isn't and doesn't check `isPriceLoading`, so it can add the old price for the new configuration.   | Fixed as part of CFG-145, since the hotkey calls the same handler.                                                                                                                                                                                  |
 | A price result is matched to the current pricing inputs, not to the `product`. If a host swapped the `product` prop without changing the selections, the old product's price would briefly count as current.                                            | Can't happen in this app (`product` is a module constant). One extra field in the result if the widget ever gets a switchable product.                                                                                                              |
 | The repo ships with ESLint errors (`ProductConfigurator.tsx`, `types.ts`), so `pnpm lint` fails on a clean checkout and the pre-commit hook blocks any commit that touches those files.                                                                 | Each ticket that touches one of these files has to make that file lint-clean first. A full cleanup isn't part of any ticket. `ProductConfigurator.tsx` is clean since CFG-148 and `types.ts` since CFG-147, so `pnpm lint` passes from CFG-147 on.  |
 | A draft is restored as stored (`handleLoadDraft`), without the checks a share link and `initialConfiguration` now get. If the product changes (e.g. a choice is removed), an old draft can bring back values the UI can't produce.                      | Not part of CFG-147 (share links). `sanitizeConfiguration` could be reused in `handleLoadDraft` as is.                                                                                                                                              |
@@ -231,6 +262,8 @@ List any issues you noticed but intentionally left:
 | The share URL is built from `origin + pathname`, so other query parameters or a hash on the host page (e.g. a product id) are dropped from the link.                                                                                                    | Existing behavior, kept in CFG-147. `new URL(window.location.href)` with `searchParams.set('config', ...)` would keep them, but I'd want a real host page to test it against.                                                                       |
 | Option-level dependencies (`ProductOption.dependsOn`) are checked by validation, but not removed when a configuration is loaded or an option changes (only add-on dependencies are).                                                                    | No product uses them today. If one does, the same sanitize step and `handleOptionChange` should cover them.                                                                                                                                         |
 | The packaging toggle's `onKeyDown` ignores `readOnly`: in read-only mode the mouse can't change it, but Enter / Space can.                                                                                                                              | Not part of CFG-148. Small, fits CFG-152 (keyboard handling) when the toggle gets a proper accessible name.                                                                                                                                         |
+| Both cart actions trust the latest validation result, but it isn't tied to the configuration it was made for, so right after a change it may still describe the previous one.                                                                           | Not reachable today: the mock validates in 50-150 ms and prices in 150-800 ms, so validation is current by the time the cart unlocks, and since CFG-147/148 the UI can't produce an invalid configuration. A real backend has no such guarantee.    |
+| The Quick Add shortcut does nothing while the price is loading (e.g. pressed right after typing a quantity), with no message.                                                                                                                           | Same as the disabled button, and the dimmed price shows why. If users find it confusing, the press could be announced or queued until the price arrives.                                                                                            |
 | A disabled add-on says "(Requires include_packaging)" - a raw option id instead of the option's name.                                                                                                                                                   | User-facing wording, fits CFG-151.                                                                                                                                                                                                                  |
 
 ### Potential Improvements for the Future
