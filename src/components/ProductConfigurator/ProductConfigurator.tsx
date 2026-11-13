@@ -180,15 +180,11 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
   const appliedDiscount = getAppliedDiscountPercentage(quantity);
   const nextTier = getNextDiscountTier(quantity);
 
-  const availableAddOns = useMemo(() => {
-    const map = new Map<string, AddOn>();
-    for (const addOn of product.addOns) {
-      if (isAddOnAvailable(addOn, selections)) {
-        map.set(addOn.id, addOn);
-      }
-    }
-    return map;
-  }, [product.addOns, selections]);
+  // Selected add-ons that exist in the product (a share link or draft may carry unknown ids).
+  const selectedAddOnDetails = selectedAddOns.flatMap((id) => {
+    const addOn = product.addOns.find((a) => a.id === id);
+    return addOn ? [addOn] : [];
+  });
 
   // -------------------------------------------------------------------------
   // Effects
@@ -217,7 +213,9 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
           setValidation(result);
           setIsValid(true);
         }
-      } catch {}
+      } catch {
+        // Validation failures are ignored for now. TODO(CFG-151): surface them to the user.
+      }
     };
 
     validate();
@@ -252,6 +250,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     if (onConfigurationChange) {
       onConfigurationChange(currentConfig);
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-157): derive isDirty instead of setting it on every change
     setIsDirty(true);
   }, [selections, selectedAddOns, quantity]);
 
@@ -265,6 +264,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     if (showShareModal) {
       const encoded = encodeConfigurationToUrl(currentConfig);
       const url = `${window.location.origin}${window.location.pathname}?config=${encoded}`;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): derive the share URL instead of storing it
       setShareUrl(url);
     }
   }, [showShareModal, currentConfig]);
@@ -276,6 +276,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     if (encodedConfig) {
       const decoded = decodeConfigurationFromUrl(encodedConfig);
       if (decoded) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(CFG-147): read the shared config in the initial state instead
         if (decoded.selections) setSelections(decoded.selections);
         if (decoded.addOns) setSelectedAddOns(decoded.addOns);
         if (decoded.quantity) setQuantity(decoded.quantity);
@@ -294,24 +295,16 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
         [optionId]: value,
       }));
 
-      const option = product.options.find((o) => o.id === optionId);
-      // Clean up any dependent add-ons whose requirement is no longer met.
-      // Toggles are handled in handleAddOnToggle, so we only need to do this for select options.
-      if (option && option.type === 'select') {
-        const dependentAddOns = product.addOns.filter((a) => a.dependsOn?.optionId === optionId);
-
-        for (const addOn of dependentAddOns) {
-          if (addOn.dependsOn && value !== addOn.dependsOn.requiredValue) {
-            const index = selectedAddOns.indexOf(addOn.id);
-            if (index > -1) {
-              selectedAddOns.splice(index, 1);
-              setSelectedAddOns(selectedAddOns);
-            }
-          }
-        }
-      }
+      // Deselect add-ons that depend on this option and whose requirement is no longer met.
+      setSelectedAddOns((prev) => {
+        const next = prev.filter((id) => {
+          const dependency = product.addOns.find((a) => a.id === id)?.dependsOn;
+          return dependency?.optionId !== optionId || dependency.requiredValue === value;
+        });
+        return next.length === prev.length ? prev : next;
+      });
     },
-    [product.options, product.addOns, selectedAddOns],
+    [product.addOns],
   );
 
   const handleAddOnToggle = useCallback(
@@ -927,15 +920,12 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
               <span>Quantity:</span>
               <span>{quantity}</span>
             </div>
-            {selectedAddOns.length > 0 && (
+            {selectedAddOnDetails.length > 0 && (
               <div className="config-summary-item">
-                <span>Add-ons ({selectedAddOns.length}):</span>
+                <span>Add-ons ({selectedAddOnDetails.length}):</span>
                 <span>
-                  {selectedAddOns
-                    .map((id) => {
-                      const addOn = availableAddOns.get(id)!;
-                      return formatPrice(addOn.price, product.currency);
-                    })
+                  {selectedAddOnDetails
+                    .map((addOn) => formatPrice(addOn.price, product.currency))
                     .join(' + ')}
                 </span>
               </div>
