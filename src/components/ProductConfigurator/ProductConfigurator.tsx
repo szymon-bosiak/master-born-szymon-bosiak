@@ -109,15 +109,16 @@ const clampQuantity = (product: Product, value: number): number => {
   return Math.max(min, Math.min(max, value));
 };
 
-// A share link is untrusted input: keep only what the product allows and fall back to
-// defaults for the rest, so the link can't restore an impossible configuration.
-const sanitizeSharedConfiguration = (
-  shared: Partial<Configuration>,
+// A starting configuration (share link or initialConfiguration) may be crafted or outdated:
+// keep only what the product allows and fall back to defaults for the rest, so it can't
+// restore an impossible configuration. An empty source gives the defaults.
+const sanitizeConfiguration = (
+  source: Partial<Configuration>,
   product: Product,
 ): Pick<Configuration, 'selections' | 'addOns' | 'quantity' | 'name'> => {
   const selections = getDefaultSelections(product);
   for (const option of product.options) {
-    const value = shared.selections?.[option.id];
+    const value = source.selections?.[option.id];
     const isValid =
       option.type === 'toggle'
         ? typeof value === 'boolean'
@@ -128,21 +129,21 @@ const sanitizeSharedConfiguration = (
   }
 
   // Same dependency rule as handleOptionChange: drop add-ons whose requirement isn't met.
-  const sharedAddOns = Array.isArray(shared.addOns) ? shared.addOns : [];
+  const sourceAddOns = Array.isArray(source.addOns) ? source.addOns : [];
   const addOns = product.addOns
-    .filter((addOn) => sharedAddOns.includes(addOn.id) && isAddOnAvailable(addOn, selections))
+    .filter((addOn) => sourceAddOns.includes(addOn.id) && isAddOnAvailable(addOn, selections))
     .map((addOn) => addOn.id);
 
-  const sharedQuantity =
-    typeof shared.quantity === 'number' && Number.isFinite(shared.quantity)
-      ? Math.trunc(shared.quantity)
+  const sourceQuantity =
+    typeof source.quantity === 'number' && Number.isFinite(source.quantity)
+      ? Math.trunc(source.quantity)
       : 1;
 
   return {
     selections,
     addOns,
-    quantity: clampQuantity(product, sharedQuantity),
-    name: typeof shared.name === 'string' ? shared.name : undefined,
+    quantity: clampQuantity(product, sourceQuantity),
+    name: typeof source.name === 'string' ? source.name : undefined,
   };
 };
 
@@ -177,29 +178,23 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const [sharedLink] = useState(readSharedLinkFromUrl);
 
-  // A share link takes precedence over initialConfiguration.
-  const [sharedConfig] = useState(() =>
-    sharedLink.status === 'valid' ? sanitizeSharedConfiguration(sharedLink.config, product) : null,
+  // A share link takes precedence over initialConfiguration; without either, the defaults.
+  const [startConfig] = useState(() =>
+    sanitizeConfiguration(
+      sharedLink.status === 'valid' ? sharedLink.config : (initialConfiguration ?? {}),
+      product,
+    ),
   );
 
-  const [selections, setSelections] = useState<Record<string, string | number | boolean>>(
-    () =>
-      sharedConfig?.selections || initialConfiguration?.selections || getDefaultSelections(product),
-  );
-
-  const [selectedAddOns, setSelectedAddOns] = useState<string[]>(
-    () => sharedConfig?.addOns || initialConfiguration?.addOns || [],
-  );
-
-  const [quantity, setQuantity] = useState<number>(
-    () => sharedConfig?.quantity || initialConfiguration?.quantity || 1,
-  );
+  const [selections, setSelections] = useState(startConfig.selections);
+  const [selectedAddOns, setSelectedAddOns] = useState(startConfig.addOns);
+  const [quantity, setQuantity] = useState(startConfig.quantity);
 
   const [configId] = useState<string>(() => initialConfiguration?.id || generateConfigId());
 
   const [isDirty, setIsDirty] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [draftName, setDraftName] = useState(() => sharedConfig?.name ?? '');
+  const [draftName, setDraftName] = useState(startConfig.name ?? '');
 
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
