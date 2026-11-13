@@ -209,8 +209,29 @@ function formatCurrency(amount: number, currency: string): string {
   }).format(amount);
 }
 
+// Helper: Encode text as base64url (UTF-8, no padding), safe in a query string
+function toBase64Url(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Helper: Decode base64url, and the standard base64 of links created before CFG-147
+function fromBase64Url(encoded: string): string {
+  // A '+' in an old link arrives as a space after query string decoding.
+  const base64 = encoded.replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    // Old links were plain btoa of Latin1 text, not UTF-8 bytes.
+    return binary;
+  }
+}
+
 /**
- * Encode configuration to URL-safe string
+ * Encode configuration to a URL-safe string (UTF-8 JSON as base64url)
  */
 export function encodeConfigurationToUrl(config: Configuration): string {
   const data = JSON.stringify({
@@ -220,7 +241,7 @@ export function encodeConfigurationToUrl(config: Configuration): string {
     n: config.name,
   });
 
-  return btoa(data);
+  return toBase64Url(data);
 }
 
 /**
@@ -228,7 +249,7 @@ export function encodeConfigurationToUrl(config: Configuration): string {
  */
 export function decodeConfigurationFromUrl(encoded: string): Partial<Configuration> | null {
   try {
-    const data = JSON.parse(atob(encoded));
+    const data = JSON.parse(fromBase64Url(encoded));
     return {
       selections: data.s || {},
       addOns: data.a || [],
