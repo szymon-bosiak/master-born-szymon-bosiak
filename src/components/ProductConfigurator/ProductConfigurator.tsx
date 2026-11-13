@@ -18,7 +18,7 @@
  * - "Resize handler might have a leak" - Marcus
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useEffectEvent, useCallback, useMemo, useRef } from 'react';
 import type {
   Product,
   ProductOption,
@@ -258,6 +258,10 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     return addOn ? [addOn] : [];
   });
 
+  // Shared by Add to Cart and Quick Add. While a new price loads, `price` still belongs to the
+  // previous configuration, so neither may add until the current price has arrived.
+  const canAddToCart = !readOnly && validation?.valid === true && !isPriceLoading && price !== null;
+
   // -------------------------------------------------------------------------
   // Effects
   // -------------------------------------------------------------------------
@@ -420,22 +424,12 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     }
   }, []);
 
+  // Shared by Add to Cart, Quick Add and the Quick Add shortcut. The shortcut bypasses the
+  // buttons' `disabled`, so the handler checks canAddToCart itself.
   const handleAddToCart = useCallback(() => {
-    if (!validation?.valid) {
-      setError(validation?.errors[0]?.code || ERROR_CODES.UNKNOWN);
-      return;
-    }
-
-    if (price && onAddToCart) {
-      onAddToCart(currentConfig, price);
-    }
-  }, [validation, price, currentConfig, onAddToCart]);
-
-  const handleQuickAdd = useCallback(() => {
-    if (price && onAddToCart) {
-      onAddToCart(currentConfig, price);
-    }
-  }, [price, currentConfig, onAddToCart]);
+    if (!canAddToCart || !price) return;
+    onAddToCart?.(currentConfig, price);
+  }, [canAddToCart, price, currentConfig, onAddToCart]);
 
   const handleCopyShareUrl = useCallback(() => {
     navigator.clipboard
@@ -466,6 +460,36 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
     },
     [handleModalClose],
   );
+
+  // Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add. Works the same on every keyboard layout,
+  // including Polish. Only AltGr+Enter is ignored: Windows reports AltGr as Ctrl+Alt, so without
+  // the Alt check the right Alt key would add to the cart too.
+  const onShortcutKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    const isQuickAddShortcut =
+      e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+    // Typing in a modal (e.g. a draft name) must not add to the cart behind it.
+    if (!isQuickAddShortcut || showDraftModal || showShareModal) return;
+
+    // Focus inside the widget, or nowhere: right after the page loads, or after a click on
+    // something that can't take focus (key events then go to <body>). A focused element of
+    // the host page keeps its own Ctrl+Enter.
+    const isInWidget = e.target instanceof Node && containerRef.current?.contains(e.target);
+    const isNothingFocused = e.target === document.body || e.target === document.documentElement;
+    if (!isInWidget && !isNothingFocused) return;
+
+    // Listens in the capture phase, before the focused control: otherwise Enter would also
+    // click a focused button or flip the packaging switch.
+    e.preventDefault();
+    e.stopPropagation();
+    // Holding the keys adds once. The guards (loading price, validation) are in handleAddToCart.
+    if (!e.repeat) handleAddToCart();
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => onShortcutKeyDown(e);
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, []);
 
   const handleDiscardChanges = useCallback(() => {
     setSelections(getDefaultSelections(product));
@@ -923,10 +947,15 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
             <div className="quick-add-section">
               <button
                 className="quick-add-btn"
-                onClick={handleQuickAdd}
-                disabled={readOnly || !validation?.valid}
+                onClick={handleAddToCart}
+                disabled={!canAddToCart}
+                aria-keyshortcuts="Control+Enter Meta+Enter"
               >
                 ⚡ Quick Add to Cart
+                {/* Hidden from screen readers, which get the shortcut from aria-keyshortcuts. */}
+                <kbd className="shortcut-hint" aria-hidden="true">
+                  Ctrl+Enter
+                </kbd>
               </button>
             </div>
           </div>
@@ -934,7 +963,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
           <button
             className="btn btn-success btn-block"
             onClick={handleAddToCart}
-            disabled={readOnly || !validation?.valid || isPriceLoading}
+            disabled={!canAddToCart}
           >
             {isPriceLoading ? 'Calculating...' : 'Add to Cart'}
           </button>

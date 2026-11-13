@@ -1,10 +1,14 @@
-# Submission: [Your Name]
+# Submission: Szymon Bosiak
 
 ## Time Spent
 
-Total time: **\_\_** (approximate)
+Total time: **about 4.5h** (approximate)
 
 - Analysis & triage: **slightly over 1h**. I read README, CONTEXT.md and TICKETS.md in full, checked every ticket against the code and then reproduced the key bugs in the running app before planning anything. Several tickets turned out to have a wrong label, a misleading note or a suggested fix that would not help (details below), and reproducing them corrected a few of my own first reads from the code, so this time decided what was worth fixing at all.
+- CFG-142, CFG-148, CFG-147: **about 2.5h**, including checking each fix in the running app and writing it up.
+- CFG-145 and finishing this document: **about 1h**.
+
+That's about half an hour over the 4h budget. I finished CFG-145 properly (a must-have for the demo) instead of starting CFG-152 and leaving it half done, and stopped there.
 
 ## Ticket Triage
 
@@ -27,6 +31,8 @@ Total time: **\_\_** (approximate)
 
 **Stretch goal:** CFG-150.
 
+**Status at the end of the time box:** 1-4 are done, and 8 is resolved by 1. 5-7 and the stretch goal are not done. CFG-152 is the most important open item before the demo (contract risk), so it should be next, then CFG-143 (heap snapshot first). The findings in the table above are meant as a handoff for both.
+
 **Not planned for this sprint:** CFG-144 (rejected in favour of CFG-145), CFG-154 (escalated to PM/Finance - urgently), CFG-146 (needs a repro), CFG-156 (couldn't reproduce), CFG-153, CFG-155, CFG-157, CFG-158. Reasons are in the tables below.
 
 ### Tickets I Addressed
@@ -37,8 +43,7 @@ List the ticket numbers you worked on, in the order you addressed them:
 2. **CFG-149**: Resolved by the CFG-142 fix, no extra code. The existing dimmed price and "Calculating..." button now show reliably while a price loads, which is what the ticket asks for. Screen reader support for the loading state moved to CFG-152.
 3. **CFG-148**: Turning off "Include Packaging" no longer crashes the widget. Add-ons whose requirement stops being met are now deselected for every option type (before only dropdowns did this), so Gift Wrap is removed and no longer charged. The summary can no longer crash on an inconsistent add-on list (e.g. from a share link). Details in Issue 2.
 4. **CFG-147**: Share links work for any configuration name (emoji, Polish letters) and no longer break when the encoded data contains a `+`. Links shared before the fix still open. Opening a link restores the name, drops values the product doesn't allow (e.g. Gift Wrap without packaging) and shows an error instead of silently loading the defaults when the link is broken. Details in Issue 3.
-5. **CFG-XXX**: [Brief description of what you did]
-6. ...
+5. **CFG-145**: Ctrl+Enter (Cmd+Enter on Mac) runs Quick Add whenever focus is inside the widget or nowhere on the page (e.g. right after it loads), and the button shows the shortcut. Quick Add now has the same guards as Add to Cart, so it can no longer add the previous configuration's price while a new one is loading. Details in Issue 4.
 
 ### Tickets I Deprioritized
 
@@ -201,6 +206,39 @@ Verified in the app: with the customer's name, Share opens without a crash and t
 
 ---
 
+#### Issue 4: Quick Add keyboard shortcut
+
+**Ticket(s):** CFG-145 (CFG-144 rejected, see Deprioritized)
+
+**What was the bug?**
+
+The ticket is a feature request, but the feature it extends had a bug: `handleQuickAdd` had no guards, and its button was disabled only for read-only mode and a failed validation. While a new price is loading, `usePriceCalculation` still returns the previous `price` (shown dimmed), so Quick Add could add the old configuration's price to the cart. Add to Cart had the extra `isPriceLoading` check, Quick Add didn't. A hotkey that calls the same handler would make this even easier to hit. The disabled Quick Add button also looked exactly like the enabled one.
+
+**How did you find it?**
+
+While triaging CFG-145 I compared the two cart buttons, since the hotkey had to behave like one of them. Before writing the listener I also checked what Ctrl+Enter already does inside the widget: Enter clicks a focused `<button>`, and the packaging switch's own `onKeyDown` reacts to Enter with any modifier. So a plain bubbling listener would add twice (button click + shortcut), or toggle packaging and then add the configuration from before the toggle. Color swatches and add-on rows aren't focusable, so a click on them moves focus to `<body>`, out of the widget. Right after the page loads nothing has focus either, so key events go to `<body>` as well. I missed that case at first and only found it by testing the finished branch.
+
+**How did you fix it?**
+
+- One derived `canAddToCart` (not read-only, validation passed, the price is current and present) disables both buttons, and one handler shared by Add to Cart, Quick Add and the shortcut checks it again, because a shortcut bypasses `disabled`. The two buttons can't drift apart again, and that drift was the bug. A disabled Quick Add now looks disabled.
+- The shortcut is Ctrl+Enter, plus Cmd+Enter for Mac users. It works the same on every keyboard layout, including Polish, which matters here (the CFG-147 customer is Polish): it only checks the Enter key and the modifier flags, and none of them depend on the layout. Only AltGr+Enter is ignored: Windows reports AltGr as Ctrl+Alt, so without the Alt check the right Alt key would add to the cart too. Shift+Ctrl+Enter is ignored as well.
+- It listens on the document, but reacts only when focus is inside the widget or nowhere (`<body>`: right after the page loads, or after a click on something that can't take focus, like a swatch). A focused element of the host page keeps its own Ctrl+Enter.
+- It runs in the capture phase, before the focused control: `preventDefault` stops a focused button's own Enter click, and `stopPropagation` keeps the packaging switch's handler from also running.
+- It's ignored while the Drafts or Share modal is open (typing a draft name must not add to the cart behind the modal), and holding the keys adds once (`e.repeat`).
+- The button shows a `Ctrl+Enter` hint, and `aria-keyshortcuts` exposes the shortcut to screen readers. The visible hint is `aria-hidden`, so the button's name isn't read twice.
+
+Verified in the app with real key presses (adds counted through a stubbed `alert`): right after the page loads, after a click outside the widget, after clicking a swatch, with Add to Cart focused and with the packaging switch focused, Ctrl+Enter adds exactly once, and packaging doesn't change. With a text field outside the widget focused (added temporarily), it adds nothing and the field gets its Enter. Plain Enter still toggles the switch. Right after a size change the shortcut and the button do nothing until the new price arrives, then add once with the new total. Held keys add once, and Ctrl+Enter in the draft name field adds nothing. Key events shaped like the ones Windows sends: left Ctrl, right Ctrl and numpad Enter each add once, AltGr+Enter (Ctrl+Alt) adds nothing. There are no console errors.
+
+**Why this approach?**
+
+- Widget or nothing focused, instead of a plain `window` listener: the widget is embedded via iframe or directly into a customer's page (CONTEXT.md). A plain `window` listener would take Ctrl+Enter from the host page's own focused fields in a direct integration, e.g. a chat box where it means "send". My first version listened only on the widget and missed the most common case: nobody clicks into the widget before pressing the shortcut. When nothing has focus, no control is waiting for the key, so the widget takes it. Whether that's fine for TechStyle's page is in Questions for the Team.
+- A guard in the handler instead of only `disabled` on the button: a shortcut never looks at the button, so every way into the action has to pass the same check.
+- I didn't queue a shortcut press that comes while the price is loading. It would have to decide what happens if the configuration changes again in the meantime, and the dimmed price and button already show why nothing happened. Noted in Things I Noticed.
+- Git history: the guard fix comes first and alone, because it's a bug on its own, even without the shortcut. The shortcut and its visible hint are separate commits.
+- After reviewing my own diff and testing the finished branch I made three more commits. Add to Cart still had its own handler with its own guards, so the drift was still possible in the handlers: now there is one handler, and its unreachable validation error branch is gone. The first version made the widget's root focusable (`tabIndex={-1}`) so a click on a swatch kept focus inside, and that root got a focus ring around the whole widget after a plain key press, which I fixed first. Then testing showed the bigger problem: right after the page loads the shortcut did nothing, which is exactly how a demo starts. The listener moved to the document (widget or nothing focused), and the focusable root, with its focus-ring fix, is gone.
+
+---
+
 ### Other Changes Made
 
 Brief description of any other modifications:
@@ -208,6 +246,7 @@ Brief description of any other modifications:
 - CFG-142: removed the unused `useDebouncedPriceCalculation` hook (dead code with the same stale-response bug) and the unused `refetch` from `usePriceCalculation`.
 - CFG-148: made `ProductConfigurator.tsx` lint-clean without changing behavior, so commits touching it pass the pre-commit hook. The empty validation `catch` got a comment (TODO(CFG-151)), and the three `set-state-in-effect` errors got single-line disables with a TODO for the ticket that owns them (CFG-157 for `isDirty`, CFG-147 for the share URL and reading a shared config).
 - CFG-147: removed both CFG-147 disables by deriving the share URL and reading the share link in the initial state (only the CFG-157 one is left). Extracted `clampQuantity`, now used by the quantity input and by the starting configuration. Made `types.ts` lint-clean (`any` to `unknown` in the unused `ConfigChangeEvent`) to add the new error code, so `pnpm lint` now passes for the whole repo.
+- CFG-145: Add to Cart now uses the same `canAddToCart` check and the same handler as Quick Add. That also disables it when there is no price at all (a failed request) instead of leaving a button that does nothing, and removed an error branch that the disabled button made unreachable. Added a disabled style for the Quick Add button.
 
 ---
 
@@ -222,7 +261,6 @@ List any issues you noticed but intentionally left:
 | "✓ Configuration validated" is shown even when validation fails: `setIsValid(true)` runs after every validation, whatever the result.                                                                                                                   | Misleading status, but Add to Cart is still guarded by `validation.valid`. Not part of any ticket - worth its own ticket.                                                                                                                           |
 | `isDirty` is effectively always `true`: an effect sets it on mount, and again right after loading or discarding a draft (the effect reacts to the restored selections). Confirmed in the app - "Discard" is visible on a fresh configuration.           | Belongs to CFG-157.                                                                                                                                                                                                                                 |
 | When a price request fails, the old total stays visible next to the error message (only the breakdown is cleared). The mock `calculatePrice` never rejects, so this path can't be reached in the demo.                                                  | Belongs to CFG-151 (error handling). I kept the existing behavior in the CFG-142 fix.                                                                                                                                                               |
-| While a new price is loading, the hook still returns the previous `price` (it's shown dimmed). Add to Cart is disabled during loading, but Quick Add isn't and doesn't check `isPriceLoading`, so it can add the old price for the new configuration.   | Fixed as part of CFG-145, since the hotkey calls the same handler.                                                                                                                                                                                  |
 | A price result is matched to the current pricing inputs, not to the `product`. If a host swapped the `product` prop without changing the selections, the old product's price would briefly count as current.                                            | Can't happen in this app (`product` is a module constant). One extra field in the result if the widget ever gets a switchable product.                                                                                                              |
 | The repo ships with ESLint errors (`ProductConfigurator.tsx`, `types.ts`), so `pnpm lint` fails on a clean checkout and the pre-commit hook blocks any commit that touches those files.                                                                 | Each ticket that touches one of these files has to make that file lint-clean first. A full cleanup isn't part of any ticket. `ProductConfigurator.tsx` is clean since CFG-148 and `types.ts` since CFG-147, so `pnpm lint` passes from CFG-147 on.  |
 | A draft is restored as stored (`handleLoadDraft`), without the checks a share link and `initialConfiguration` now get. If the product changes (e.g. a choice is removed), an old draft can bring back values the UI can't produce.                      | Not part of CFG-147 (share links). `sanitizeConfiguration` could be reused in `handleLoadDraft` as is.                                                                                                                                              |
@@ -231,6 +269,8 @@ List any issues you noticed but intentionally left:
 | The share URL is built from `origin + pathname`, so other query parameters or a hash on the host page (e.g. a product id) are dropped from the link.                                                                                                    | Existing behavior, kept in CFG-147. `new URL(window.location.href)` with `searchParams.set('config', ...)` would keep them, but I'd want a real host page to test it against.                                                                       |
 | Option-level dependencies (`ProductOption.dependsOn`) are checked by validation, but not removed when a configuration is loaded or an option changes (only add-on dependencies are).                                                                    | No product uses them today. If one does, the same sanitize step and `handleOptionChange` should cover them.                                                                                                                                         |
 | The packaging toggle's `onKeyDown` ignores `readOnly`: in read-only mode the mouse can't change it, but Enter / Space can.                                                                                                                              | Not part of CFG-148. Small, fits CFG-152 (keyboard handling) when the toggle gets a proper accessible name.                                                                                                                                         |
+| Both cart actions trust the latest validation result, but it isn't tied to the configuration it was made for, so right after a change it may still describe the previous one.                                                                           | Not reachable today: the mock validates in 50-150 ms and prices in 150-800 ms, so validation is current by the time the cart unlocks, and since CFG-147/148 the UI can't produce an invalid configuration. A real backend has no such guarantee.    |
+| The Quick Add shortcut does nothing while the price is loading (e.g. pressed right after typing a quantity), with no message.                                                                                                                           | Same as the disabled button, and the dimmed price shows why. If users find it confusing, the press could be announced or queued until the price arrives.                                                                                            |
 | A disabled add-on says "(Requires include_packaging)" - a raw option id instead of the option's name.                                                                                                                                                   | User-facing wording, fits CFG-151.                                                                                                                                                                                                                  |
 
 ### Potential Improvements for the Future
@@ -238,7 +278,10 @@ List any issues you noticed but intentionally left:
 If you had more time, what would you improve?
 
 1. Unit tests for the share link encoding (round trip, `+` turned into a space, links from before CFG-147). They're pure functions with tricky edge cases, and I could only check them with an ad hoc Node script, because the repo has no test runner yet. Vitest would fit the existing Vite setup.
-2. [Improvement 2]
+2. More tests where bugs actually happened: out-of-order price responses in `usePriceCalculation` (fake timers), and `sanitizeConfiguration` / the add-on dependency rule.
+3. An error boundary around the widget. CFG-147 and CFG-148 both ended in a white screen on the customer's page. A widget embedded in someone else's site should fail inside its own box, with a message.
+4. One pattern for async results tied to the configuration they belong to. The price hook does this since CFG-142, but validation and preview each repeat their own `cancelled` flag, and validation isn't tied to its configuration (see Things I Noticed).
+5. Split `ProductConfigurator` (about 1000 lines) into options, add-ons, price panel and modals, once there are tests to catch regressions. A real modal component (focus trap, `role="dialog"`, focus returned to the trigger) would also cover part of CFG-152.
 
 ---
 
@@ -246,8 +289,11 @@ If you had more time, what would you improve?
 
 Questions you would ask in a real scenario:
 
-1. [Question 1]
-2. [Question 2]
+1. **PM + Finance (before the demo):** what are the official quantity discount tiers? Details under CFG-154 in "Stopped to Ask".
+2. **Sarah (Product) + the TechStyle account owner:** Quick Add is removed (CFG-144) or kept with a hotkey (CFG-145)? Could it stay as an enterprise-only feature?
+3. **TechStyle / whoever sets up the demo:** is the widget embedded via iframe or directly into the page? The Quick Add shortcut reacts when focus is inside the widget or nowhere on the page, and never takes Ctrl+Enter from a focused field of the host page. In a direct integration, a host page with its own page-wide Ctrl+Enter shortcut would lose it while nothing has focus. Is that acceptable?
+4. **QA (Alex):** a concrete repro for CFG-146 (screen, browser, timezone, how far off).
+5. **Engineering:** is the widget ever server-rendered? It reads the share link from `window.location` during its first render (see Things I Noticed).
 
 ---
 
@@ -264,15 +310,22 @@ List any assumptions you made to proceed:
 
 ### What went well?
 
-[Your reflection]
+- Checking every ticket in the code and in the running app before trusting it. It changed the plan several times: CFG-147 isn't a dev-only flake, Marcus's fix for CFG-158 does nothing, CFG-149 was a symptom of CFG-142, CFG-156 couldn't be reproduced at all, and CFG-152's real priority was hidden in its notes.
+- Fixing root causes instead of symptoms: the stale price logic replaced instead of patched, the invalid add-on removed where it's created (not only hidden in the summary), and the starting configuration treated as untrusted input.
+- Verifying each fix in the app, including the edge cases (out-of-order responses, old share links, crafted links), and writing down what I checked.
+- A history that's easy to review: one stacked PR per ticket, refactors without behavior change separated from fixes, and the docs in their own commits.
 
 ### What was challenging?
 
-[Your reflection]
+- Time. Triage took over an hour, and the repo ships with lint errors that the pre-commit hook enforces, so most tickets needed a cleanup commit before the actual fix.
+- Contradictory or messy tickets (CFG-144 vs CFG-145, CFG-154) where the right move was a decision or a question, not code.
+- Being wrong in my own triage: I first filed the `+` in share links as hardening, and only a systematic check while planning the fix showed it was a second root cause. I corrected the note instead of hiding it.
 
 ### What would you do differently with more time?
 
-[Your reflection]
+- Do CFG-152 next. It's the biggest risk left for the demo, and I'd rather ship it before any polish.
+- Set up Vitest at the start. Several fixes are pure functions with tricky edge cases that I could only check with ad hoc scripts.
+- Time-box triage harder and ask the questions about CFG-144 / CFG-154 on day one, in parallel with the fixes.
 
 ---
 
@@ -287,10 +340,19 @@ Useful things to share:
 - Anything the AI suggested that you rejected — and why
 - Anything you verified manually that the AI got wrong
 
+I worked with Claude Code (Claude) as a pair programmer for the whole task.
+
+- **How:** for each ticket I asked it to check the ticket against the code, reproduce it in the browser. I proposed a plan fro Claude to validate and refine (root cause, commit split). I reviewed the plan, then had it prepare one commit at a time with build and lint run. I reviewed each diff and made every commit myself. It also drafted parts of this document, which I edited.
+- **Where I steered it:** the workflow (stacked PRs, conventional commits with the ticket id), the priorities (TechStyle first, CFG-144 rejected), and the rule that nothing counts as fixed until it's checked in the running app, not only in the code. I carefully reviewed each change and highlighted anything that seemed suspicious or caught my attention.
+- **What verification caught:** first reads of the code that reproducing in the app corrected (e.g. the `+` in share links first filed as hardening). A lint run that looked clean but was a false pass: a `return` inside `try/finally` made the React Compiler skip the function, so `react-hooks/set-state-in-effect` never ran on it. We confirmed real results with a deliberate canary error. And when I tested the finished shortcut myself, Ctrl+Enter did nothing right after the page loaded: all of the AI's browser checks had started with a click inside the widget. The fix also made the design simpler (Issue 4).
+- **Rejected:** the ticket's own suggested fixes (Marcus's `'...'` for CFG-149, `useMemo` for CFG-158), and shortcuts that would have hidden symptoms instead of fixing causes, e.g. only guarding the summary in CFG-148.
+
 ---
 
 ## Additional Notes
 
 Anything else you want us to know:
 
-[Your notes]
+- **How to review:** the work is a stack of PRs, one per ticket, each based on the previous branch, so each PR shows only its own ticket's diff. Review order: #1 CFG-142 (base `main`) -> #2 CFG-148 -> #4 CFG-147 -> CFG-145 (the last PR). This document is complete on the last branch.
+- **Checks:** `pnpm build` passes and `pnpm lint` has 0 errors on the last branch. On the branches below CFG-147, lint still reports the two `types.ts` errors the repo shipped with (fixed in CFG-147). One warning is left (`react-hooks/exhaustive-deps` on the `isDirty` effect), and it was there before. It belongs to CFG-157.
+- The repo has no test runner, so verification was manual in the running app plus ad hoc Node scripts for the share link encoding. The steps are listed in each issue above.
