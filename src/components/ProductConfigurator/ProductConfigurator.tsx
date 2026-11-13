@@ -114,7 +114,7 @@ const clampQuantity = (product: Product, value: number): number => {
 const sanitizeSharedConfiguration = (
   shared: Partial<Configuration>,
   product: Product,
-): Pick<Configuration, 'selections' | 'addOns' | 'quantity'> => {
+): Pick<Configuration, 'selections' | 'addOns' | 'quantity' | 'name'> => {
   const selections = getDefaultSelections(product);
   for (const option of product.options) {
     const value = shared.selections?.[option.id];
@@ -138,7 +138,12 @@ const sanitizeSharedConfiguration = (
       ? Math.trunc(shared.quantity)
       : 1;
 
-  return { selections, addOns, quantity: clampQuantity(product, sharedQuantity) };
+  return {
+    selections,
+    addOns,
+    quantity: clampQuantity(product, sharedQuantity),
+    name: typeof shared.name === 'string' ? shared.name : undefined,
+  };
 };
 
 const formatTimestamp = (isoString: string): string => {
@@ -194,7 +199,7 @@ export const ProductConfigurator: React.FC<ProductConfiguratorProps> = ({
 
   const [isDirty, setIsDirty] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-  const [draftName, setDraftName] = useState('');
+  const [draftName, setDraftName] = useState(() => sharedConfig?.name ?? '');
 
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
